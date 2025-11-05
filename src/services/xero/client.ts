@@ -176,8 +176,8 @@ export class XeroService {
       }
 
       // Build where clause to filter by account ID only
-      // Note: Xero API date filtering in where clause can be tricky, so we'll filter by date client-side
-      const where = `Account.AccountID=Guid("${accountId}")`;
+      // Note: BankTransaction uses BankAccount property, not Account
+      const where = `BankAccount.AccountID=Guid("${accountId}")`;
       
       // Convert date strings to Date objects for client-side filtering
       const fromDateObj = new Date(fromDate);
