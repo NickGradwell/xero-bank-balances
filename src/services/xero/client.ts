@@ -241,9 +241,18 @@ export class XeroService {
           accountMatches = txAccountId.toLowerCase().trim() === accountId.toLowerCase().trim();
         }
         
-        // If ID doesn't match, try matching by name
+        // If ID doesn't match, try matching by name (case-insensitive, trim whitespace)
         if (!accountMatches && txAccountName && accountName) {
-          accountMatches = txAccountName.toLowerCase().trim() === accountName.toLowerCase().trim();
+          const normalizedTxName = txAccountName.toLowerCase().trim();
+          const normalizedAccountName = accountName.toLowerCase().trim();
+          accountMatches = normalizedTxName === normalizedAccountName;
+          
+          // Also try partial matching in case of slight differences
+          if (!accountMatches) {
+            // Check if one contains the other (for variations like "The Forest" vs "Forest")
+            accountMatches = normalizedTxName.includes(normalizedAccountName) || 
+                            normalizedAccountName.includes(normalizedTxName);
+          }
         }
         
         if (!accountMatches) {
@@ -255,7 +264,32 @@ export class XeroService {
         const txDate = new Date(tx.date);
         return txDate >= fromDateObj && txDate <= toDateObj;
       });
+      
+      // Log detailed match information for debugging
+      if (filteredTransactions.length === 0 && allTransactions.length > 0) {
+        const accountNameMatches = allTransactions.filter((tx: XeroBankTransaction) => {
+          const txAccountName = tx.bankAccount?.name;
+          if (!txAccountName || !accountName) return false;
+          const normalizedTxName = txAccountName.toLowerCase().trim();
+          const normalizedAccountName = accountName.toLowerCase().trim();
+          return normalizedTxName.includes(normalizedAccountName) || 
+                 normalizedAccountName.includes(normalizedTxName);
+        });
+        
+        logger.info(`No exact matches found. Potential name matches: ${accountNameMatches.length}`, {
+          requestedName: accountName,
+          matchingNames: accountNameMatches.slice(0, 5).map((tx: XeroBankTransaction) => ({
+            name: tx.bankAccount?.name,
+            date: tx.date,
+            accountId: tx.bankAccount?.accountID,
+          })),
+        });
+      }
 
+      // Note: Xero API might have pagination or limits. If we're only getting 45 transactions total,
+      // we might need to check if there are more. For now, we'll work with what we have.
+      // TODO: Consider implementing pagination if needed
+      
       logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (${accountName}) (from ${allTransactions.length} total)`);
       
       // Log detailed filtering results
@@ -269,7 +303,16 @@ export class XeroService {
       logger.info(`Account IDs found in transactions: ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
       logger.info(`Account names found in transactions: ${JSON.stringify(uniqueAccountNames.slice(0, 10))}`);
       logger.info(`Requested account ID: ${accountId}, Name: ${accountName}`);
-      logger.info(`Match found by ID: ${uniqueAccountIds.includes(accountId)}, by Name: ${uniqueAccountNames.includes(accountName)}`);
+      
+      // Check for partial name matches
+      const nameMatches = uniqueAccountNames.filter(name => {
+        if (!name || !accountName) return false;
+        const normalizedName = name.toLowerCase().trim();
+        const normalizedAccountName = accountName.toLowerCase().trim();
+        return normalizedName.includes(normalizedAccountName) || 
+               normalizedAccountName.includes(normalizedName);
+      });
+      logger.info(`Match found by ID: ${uniqueAccountIds.includes(accountId)}, by Name (exact): ${uniqueAccountNames.includes(accountName)}, by Name (partial): ${nameMatches.length > 0} (${JSON.stringify(nameMatches)})`);
 
       // Transform to our BankTransaction format
       return filteredTransactions.map((tx: XeroBankTransaction) => {
