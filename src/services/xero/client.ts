@@ -55,9 +55,12 @@ export class XeroService {
         logger.info(`Found account details for debugging:`, {
           accountID: forestAccount.accountID,
           name: forestAccount.name,
-          code: forestAccount.code,
+          code: forestAccount.code || '(empty)',
           type: forestAccount.type,
+          status: forestAccount.status,
         });
+      } else {
+        logger.warn(`Could not find account with ID cec0d2b1-9064-4968-8346-8ac3524e3b52 or name containing 'forest'`);
       }
 
       // Fetch BankSummary report to get balances
@@ -264,7 +267,7 @@ export class XeroService {
         // Continue fetching until we get fewer than pageSize
       }
       
-      logger.info(`Pagination finished: fetched ${allTransactions.length} total transactions across ${page - 1} pages`);
+      logger.info(`Pagination finished: fetched ${allTransactions.length} total transactions across ${page - 1} page(s)`);
       
       // Log detailed information about the API response
       logger.info(`API response received: ${allTransactions.length} total transactions fetched`);
