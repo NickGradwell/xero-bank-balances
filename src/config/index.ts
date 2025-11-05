@@ -22,11 +22,12 @@ export const config: Config = {
     clientId: process.env.XERO_CLIENT_ID || '',
     clientSecret: process.env.XERO_CLIENT_SECRET || '',
     redirectUri: process.env.XERO_REDIRECT_URI || 'http://localhost:3000/auth/xero/callback',
-    scopes: [
-      'accounting.transactions.read',
-      'accounting.settings.read',
-      'offline_access',
-    ],
+        scopes: [
+          'accounting.transactions.read',
+          'accounting.settings.read',
+          'accounting.reports.read',
+          'offline_access',
+        ],
   },
   app: {
     port: parseInt(process.env.PORT || '3000', 10),
