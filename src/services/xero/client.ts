@@ -45,6 +45,20 @@ export class XeroService {
       );
 
       logger.info(`Retrieved ${bankAccounts.length} bank accounts from Accounts endpoint`);
+      
+      // Log account details for "The Forest" or other accounts for debugging
+      const forestAccount = bankAccounts.find((acc: Account) => 
+        acc.name?.toLowerCase().includes('forest') || 
+        acc.accountID === 'cec0d2b1-9064-4968-8346-8ac3524e3b52'
+      );
+      if (forestAccount) {
+        logger.info(`Found account details for debugging:`, {
+          accountID: forestAccount.accountID,
+          name: forestAccount.name,
+          code: forestAccount.code,
+          type: forestAccount.type,
+        });
+      }
 
       // Fetch BankSummary report to get balances
       // The report requires date range - use last 90 days to ensure we capture all accounts
@@ -163,6 +177,7 @@ export class XeroService {
     tokenSet: XeroTokenSet,
     accountId: string,
     accountName: string,
+    accountCode: string,
     fromDate: string,
     toDate: string
   ): Promise<BankTransaction[]> {
@@ -176,9 +191,19 @@ export class XeroService {
         throw new Error('No tenant ID available');
       }
 
-      // Try fetching without where clause first - Xero API where clause syntax can be problematic
-      // We'll filter by account ID client-side instead
-      const where = undefined; // Remove where clause temporarily to debug
+      // Try using where clause to filter by account - Xero API supports filtering
+      // According to Xero docs, we can filter by BankAccount.AccountID using Guid syntax
+      // But we'll fetch all and filter client-side as fallback since where clause syntax can be tricky
+      let where: string | undefined = undefined;
+      
+      // Try where clause if we have account ID - but keep it simple for now
+      // Format: BankAccount.AccountID=Guid("account-id")
+      // Note: This may not work, so we'll also filter client-side
+      if (accountId) {
+        // where = `BankAccount.AccountID=Guid("${accountId}")`;
+        // Disabled for now - will filter client-side instead
+        where = undefined;
+      }
       
       // Convert date strings to Date objects for client-side filtering
       const fromDateObj = new Date(fromDate);
@@ -188,20 +213,31 @@ export class XeroService {
 
       logger.info('Fetching bank transactions', {
         accountId,
+        accountName,
+        accountCode,
         fromDate,
         toDate,
         usingWhereClause: !!where,
+        whereClause: where,
       });
 
       // Get bank transactions for the specified account
       // We'll filter by date range and account ID client-side since Xero API filtering can be unreliable
-      // Note: Xero API might return paginated results. We'll fetch multiple pages if needed.
+      // Note: Xero API pagination starts at page 1, returns up to 100 records per page
       let allTransactions: XeroBankTransaction[] = [];
       let page = 1;
       const pageSize = 100; // Xero typically returns up to 100 per page
+      const maxPages = 50; // Safety limit to prevent infinite loops (5000 transactions max)
       let hasMore = true;
       
-      while (hasMore && page <= 10) { // Limit to 10 pages (1000 transactions) to avoid infinite loops
+      logger.info('Starting pagination fetch', {
+        accountId,
+        accountName,
+        accountCode,
+        maxPages,
+      });
+      
+      while (hasMore && page <= maxPages) {
         const response = await this.client.accountingApi.getBankTransactions(
           tenantId,
           undefined, // ifModifiedSince
@@ -214,48 +250,66 @@ export class XeroService {
         const transactions = response.body.bankTransactions || [];
         allTransactions = allTransactions.concat(transactions);
         
+        logger.info(`Fetched page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
+        
         // If we got fewer than pageSize, we've reached the end
         if (transactions.length < pageSize) {
           hasMore = false;
+          logger.info(`Pagination complete: received ${transactions.length} transactions (less than page size ${pageSize})`);
         } else {
           page++;
         }
         
-        logger.info(`Fetched page ${page - 1}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
+        // Safety check: if we got exactly pageSize, there might be more pages
+        // Continue fetching until we get fewer than pageSize
       }
       
+      logger.info(`Pagination finished: fetched ${allTransactions.length} total transactions across ${page - 1} pages`);
+      
       // Log detailed information about the API response
-      logger.info(`API response received: ${allTransactions.length} total transactions for account ${accountId}`);
+      logger.info(`API response received: ${allTransactions.length} total transactions fetched`);
       
       if (allTransactions.length > 0) {
         const firstTx = allTransactions[0];
+        const lastTx = allTransactions[allTransactions.length - 1];
         logger.info(`First transaction: date=${firstTx.date}, bankAccountId=${firstTx.bankAccount?.accountID}, bankAccountName=${firstTx.bankAccount?.name}`);
+        logger.info(`Last transaction: date=${lastTx.date}, bankAccountId=${lastTx.bankAccount?.accountID}, bankAccountName=${lastTx.bankAccount?.name}`);
         
         // Log account IDs from first 5 transactions
         const accountIds = allTransactions.slice(0, 5).map((tx: XeroBankTransaction) => ({
           date: tx.date,
           bankAccountId: tx.bankAccount?.accountID,
           bankAccountName: tx.bankAccount?.name,
+          bankAccountCode: tx.bankAccount?.code,
         }));
-        logger.info(`First 5 transaction account IDs: ${JSON.stringify(accountIds)}`);
+        logger.info(`First 5 transaction account details: ${JSON.stringify(accountIds)}`);
         
-        // Log all unique account IDs
+        // Log all unique account IDs, names, and codes
         const uniqueAccountIds = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
           tx.bankAccount?.accountID
         ).filter(Boolean)));
+        const uniqueAccountNames = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.name
+        ).filter(Boolean)));
+        const uniqueAccountCodes = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.code
+        ).filter(Boolean)));
         logger.info(`Unique account IDs in transactions (${uniqueAccountIds.length}): ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
-        logger.info(`Requested account ID: ${accountId}`);
+        logger.info(`Unique account names in transactions (${uniqueAccountNames.length}): ${JSON.stringify(uniqueAccountNames.slice(0, 10))}`);
+        logger.info(`Unique account codes in transactions (${uniqueAccountCodes.length}): ${JSON.stringify(uniqueAccountCodes.slice(0, 10))}`);
+        logger.info(`Requested account ID: ${accountId}, Name: ${accountName}`);
       }
 
-      // Filter transactions by account ID and date range (client-side filtering)
+      // Filter transactions by account ID, name, code, and date range (client-side filtering)
       const filteredTransactions = allTransactions.filter((tx: XeroBankTransaction) => {
-        // Filter by account ID first, then fall back to account name
+        // Get all possible identifiers from transaction
         const txAccountId = tx.bankAccount?.accountID;
         const txAccountName = tx.bankAccount?.name;
+        const txAccountCode = tx.bankAccount?.code;
         
         // Try matching by ID first
         let accountMatches = false;
-        if (txAccountId) {
+        if (txAccountId && accountId) {
           accountMatches = txAccountId.toLowerCase().trim() === accountId.toLowerCase().trim();
         }
         
@@ -271,6 +325,13 @@ export class XeroService {
             accountMatches = normalizedTxName.includes(normalizedAccountName) || 
                             normalizedAccountName.includes(normalizedTxName);
           }
+        }
+        
+        // If still no match, try matching by account code
+        if (!accountMatches && txAccountCode && accountCode) {
+          const normalizedTxCode = txAccountCode.toLowerCase().trim();
+          const normalizedAccountCode = accountCode.toLowerCase().trim();
+          accountMatches = normalizedTxCode === normalizedAccountCode;
         }
         
         if (!accountMatches) {
@@ -300,9 +361,10 @@ export class XeroService {
         const accountMatches = allTransactions.filter((tx: XeroBankTransaction) => {
           const txAccountId = tx.bankAccount?.accountID;
           const txAccountName = tx.bankAccount?.name;
+          const txAccountCode = tx.bankAccount?.code;
           
           let matches = false;
-          if (txAccountId) {
+          if (txAccountId && accountId) {
             matches = txAccountId.toLowerCase().trim() === accountId.toLowerCase().trim();
           }
           
@@ -313,25 +375,28 @@ export class XeroService {
                      normalizedTxName.includes(normalizedAccountName) || 
                      normalizedAccountName.includes(normalizedTxName);
           }
+          
+          if (!matches && txAccountCode && accountCode) {
+            matches = txAccountCode.toLowerCase().trim() === accountCode.toLowerCase().trim();
+          }
+          
           return matches;
         });
         
         logger.info(`No transactions found after filtering. Account matches (without date filter): ${accountMatches.length}`, {
           requestedName: accountName,
           requestedAccountId: accountId,
+          requestedAccountCode: accountCode,
           dateRange: `${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`,
           matchingTransactions: accountMatches.slice(0, 5).map((tx: XeroBankTransaction) => ({
             name: tx.bankAccount?.name,
+            code: tx.bankAccount?.code,
             date: tx.date,
             accountId: tx.bankAccount?.accountID,
           })),
         });
       }
 
-      // Note: Xero API might have pagination or limits. If we're only getting 45 transactions total,
-      // we might need to check if there are more. For now, we'll work with what we have.
-      // TODO: Consider implementing pagination if needed
-      
       logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (${accountName}) (from ${allTransactions.length} total)`);
       
       // Log detailed filtering results
@@ -341,10 +406,14 @@ export class XeroService {
       const uniqueAccountNames = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
         tx.bankAccount?.name
       ).filter(Boolean)));
+      const uniqueAccountCodes = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+        tx.bankAccount?.code
+      ).filter(Boolean)));
       logger.info(`Date range: ${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`);
       logger.info(`Account IDs found in transactions: ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
       logger.info(`Account names found in transactions: ${JSON.stringify(uniqueAccountNames.slice(0, 10))}`);
-      logger.info(`Requested account ID: ${accountId}, Name: ${accountName}`);
+      logger.info(`Account codes found in transactions: ${JSON.stringify(uniqueAccountCodes.slice(0, 10))}`);
+      logger.info(`Requested account ID: ${accountId}, Name: ${accountName}, Code: ${accountCode}`);
       
       // Check for partial name matches
       const nameMatches = uniqueAccountNames.filter(name => {
@@ -354,7 +423,11 @@ export class XeroService {
         return normalizedName.includes(normalizedAccountName) || 
                normalizedAccountName.includes(normalizedName);
       });
-      logger.info(`Match found by ID: ${uniqueAccountIds.includes(accountId)}, by Name (exact): ${uniqueAccountNames.includes(accountName)}, by Name (partial): ${nameMatches.length > 0} (${JSON.stringify(nameMatches)})`);
+      const codeMatches = uniqueAccountCodes.filter(code => {
+        if (!code || !accountCode) return false;
+        return code.toLowerCase().trim() === accountCode.toLowerCase().trim();
+      });
+      logger.info(`Match found by ID: ${uniqueAccountIds.includes(accountId)}, by Name (exact): ${uniqueAccountNames.includes(accountName)}, by Name (partial): ${nameMatches.length > 0} (${JSON.stringify(nameMatches)}), by Code: ${codeMatches.length > 0}`);
 
       // Transform to our BankTransaction format
       return filteredTransactions.map((tx: XeroBankTransaction) => {
