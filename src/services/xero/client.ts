@@ -205,24 +205,24 @@ export class XeroService {
 
       const allTransactions = response.body.bankTransactions || [];
 
+      const lastTx = allTransactions.length > 0 ? allTransactions[allTransactions.length - 1] : null;
       logger.info('API response received', {
         accountId,
         totalTransactionsReturned: allTransactions.length,
-        firstTransactionDate: allTransactions[0]?.date,
-        lastTransactionDate: allTransactions[allTransactions.length - 1]?.date,
-        sampleTransaction: allTransactions[0] ? {
+        firstTransactionDate: allTransactions[0]?.date ? new Date(allTransactions[0].date).toISOString() : null,
+        lastTransactionDate: lastTx?.date ? new Date(lastTx.date).toISOString() : null,
+        sampleTransaction: allTransactions[0] ? JSON.stringify({
           id: allTransactions[0].bankTransactionID,
           date: allTransactions[0].date,
           bankAccountId: allTransactions[0].bankAccount?.accountID,
           bankAccountName: allTransactions[0].bankAccount?.name,
           bankAccountCode: allTransactions[0].bankAccount?.code,
-          fullBankAccount: allTransactions[0].bankAccount,
-        } : null,
-        accountIdsInTransactions: allTransactions.slice(0, 5).map((tx: XeroBankTransaction) => ({
+        }) : null,
+        accountIdsInTransactions: JSON.stringify(allTransactions.slice(0, 5).map((tx: XeroBankTransaction) => ({
           date: tx.date,
           bankAccountId: tx.bankAccount?.accountID,
           bankAccountName: tx.bankAccount?.name,
-        })),
+        }))),
       });
 
       // Filter transactions by account ID and date range (client-side filtering)
@@ -259,9 +259,9 @@ export class XeroService {
         },
         filteredCount: filteredTransactions.length,
         totalCount: allTransactions.length,
-        matchingAccountIds: Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+        matchingAccountIds: JSON.stringify(Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
           tx.bankAccount?.accountID
-        ).filter(Boolean))).slice(0, 10),
+        ).filter(Boolean))).slice(0, 10)),
         requestedAccountId: accountId,
       });
 
