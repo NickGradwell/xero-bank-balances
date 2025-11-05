@@ -66,15 +66,16 @@ After creating your app, you'll see the app details page. This is where you'll c
 
 ---
 
-## Step 4: Configure OAuth Scopes
+## Step 4: OAuth Scopes (Already Configured!)
 
-1. Scroll down to the **"OAuth 2.0 scopes"** section
-2. You need to select the following scopes:
-   - ✅ **accounting.transactions.read** - Read accounting transactions
-   - ✅ **accounting.settings.read** - Read accounting settings
-   - ✅ **offline_access** - Access data when user is offline (required for refresh tokens)
+**Good news!** OAuth scopes are not configured in the Xero Developer Portal - they're specified in your application code when making the authorization request. 
 
-3. Click **"Save"** after selecting the scopes
+The scopes are already configured in your application (`src/config/index.ts`):
+- ✅ **accounting.transactions.read** - Read accounting transactions
+- ✅ **accounting.settings.read** - Read accounting settings  
+- ✅ **offline_access** - Access data when user is offline (required for refresh tokens)
+
+**You don't need to do anything here** - the application will automatically request these scopes when you click "Connect to Xero". The user will see these permissions when they authorize your app.
 
 ---
 
