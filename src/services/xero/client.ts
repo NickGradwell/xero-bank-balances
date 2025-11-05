@@ -47,9 +47,23 @@ export class XeroService {
       logger.info(`Retrieved ${bankAccounts.length} bank accounts from Accounts endpoint`);
 
       // Fetch BankSummary report to get balances
+      // The report requires date range - use last 90 days to ensure we capture all accounts
       let balancesMap: Map<string, number> = new Map();
       try {
-        const reportResponse = await this.client.accountingApi.getReportBankSummary(tenantId);
+        const toDate = new Date();
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - 90); // 90 days ago
+        
+        // Format dates as YYYY-MM-DD for Xero API
+        const formatDate = (date: Date): string => {
+          return date.toISOString().split('T')[0];
+        };
+        
+        const reportResponse = await this.client.accountingApi.getReportBankSummary(
+          tenantId,
+          formatDate(fromDate),
+          formatDate(toDate)
+        );
         const report = reportResponse.body.reports?.[0];
         
         if (report && report.rows) {
