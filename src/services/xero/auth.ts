@@ -31,18 +31,34 @@ export async function getAuthorizationUrl(): Promise<string> {
 
 export async function exchangeCodeForToken(
   code: string,
-  state: string
+  state: string,
+  req?: any
 ): Promise<XeroTokenSet> {
   try {
     const client = getXeroClient();
-    const tokenSet = await client.apiCallback(`${config.xero.redirectUri}?code=${code}&state=${state}`);
+    
+    // apiCallback can accept either a URL string or the request object
+    // Try with the request object first if available, otherwise use URL string
+    let tokenSet;
+    if (req) {
+      tokenSet = await client.apiCallback(req);
+    } else {
+      const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
+      tokenSet = await client.apiCallback(callbackUrl);
+    }
     
     await client.updateTenants();
     
     const tenantId = client.tenants?.[0]?.tenantId || '';
     
+    if (!tokenSet) {
+      throw new Error('Token set is null or undefined');
+    }
+
     logger.info('Successfully exchanged code for token', {
       tenantId: tenantId,
+      hasAccessToken: !!tokenSet.access_token,
+      hasRefreshToken: !!tokenSet.refresh_token,
     });
 
     return {
@@ -53,7 +69,10 @@ export async function exchangeCodeForToken(
       xero_tenant_id: tenantId,
     };
   } catch (error) {
-    logger.error('Failed to exchange code for token', { error });
+    logger.error('Failed to exchange code for token', { 
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     throw error;
   }
 }

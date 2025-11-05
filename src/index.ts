@@ -78,18 +78,29 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
   try {
     const { code, state } = req.query;
 
+    logger.info('OAuth callback received', {
+      hasCode: !!code,
+      hasState: !!state,
+      sessionState: req.session.oauthState,
+    });
+
     if (!code || typeof code !== 'string') {
+      logger.error('Authorization code missing in callback');
       res.status(400).send('Authorization code missing');
       return;
     }
 
     if (!state || state !== req.session.oauthState) {
+      logger.error('Invalid state parameter', {
+        receivedState: state,
+        expectedState: req.session.oauthState,
+      });
       res.status(400).send('Invalid state parameter');
       return;
     }
 
-    // Exchange code for token
-    const tokenSet = await exchangeCodeForToken(code, state as string);
+    // Exchange code for token - pass the request object if apiCallback supports it
+    const tokenSet = await exchangeCodeForToken(code, state as string, req);
 
     // Store token set in session
     req.session.xeroTokenSet = tokenSet;
@@ -102,7 +113,10 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
     // Redirect to main page
     res.redirect('/');
   } catch (error) {
-    logger.error('OAuth callback failed', { error });
+    logger.error('OAuth callback failed', { 
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     res.status(500).send('Authentication failed. Please try again.');
   }
 });
