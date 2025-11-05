@@ -1,4 +1,4 @@
-import { XeroClient, Account } from 'xero-node';
+import { XeroClient, Account, AccountType } from 'xero-node';
 import { logger } from '../../utils/logger';
 import { BankAccount } from '../../types/xero';
 import { getXeroClient, setTokenSet, isTokenExpired, refreshAccessToken } from './auth';
