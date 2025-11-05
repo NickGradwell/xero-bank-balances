@@ -195,16 +195,34 @@ export class XeroService {
 
       // Get bank transactions for the specified account
       // We'll filter by date range and account ID client-side since Xero API filtering can be unreliable
-      const response = await this.client.accountingApi.getBankTransactions(
-        tenantId,
-        undefined, // ifModifiedSince
-        where,
-        'Date DESC', // order by date descending
-        undefined, // page
-        undefined // unitdp
-      );
-
-      const allTransactions = response.body.bankTransactions || [];
+      // Note: Xero API might return paginated results. We'll fetch multiple pages if needed.
+      let allTransactions: XeroBankTransaction[] = [];
+      let page = 1;
+      const pageSize = 100; // Xero typically returns up to 100 per page
+      let hasMore = true;
+      
+      while (hasMore && page <= 10) { // Limit to 10 pages (1000 transactions) to avoid infinite loops
+        const response = await this.client.accountingApi.getBankTransactions(
+          tenantId,
+          undefined, // ifModifiedSince
+          where,
+          'Date DESC', // order by date descending
+          page,
+          undefined // unitdp
+        );
+        
+        const transactions = response.body.bankTransactions || [];
+        allTransactions = allTransactions.concat(transactions);
+        
+        // If we got fewer than pageSize, we've reached the end
+        if (transactions.length < pageSize) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+        
+        logger.info(`Fetched page ${page - 1}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
+      }
       
       // Log detailed information about the API response
       logger.info(`API response received: ${allTransactions.length} total transactions for account ${accountId}`);
