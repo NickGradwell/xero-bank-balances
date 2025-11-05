@@ -93,7 +93,14 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
     // Handle state parameter - Express query params can be string or string[]
     let stateValue: string;
     if (Array.isArray(state)) {
-      stateValue = state[0];
+      const firstState = state[0];
+      if (typeof firstState === 'string') {
+        stateValue = firstState;
+      } else {
+        logger.error('State parameter array contains non-string value', { state });
+        res.status(400).send('State parameter invalid');
+        return;
+      }
       logger.warn('State parameter received as array, using first value', { state });
     } else if (typeof state === 'string') {
       stateValue = state;
