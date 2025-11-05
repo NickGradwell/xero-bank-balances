@@ -98,10 +98,21 @@ export class XeroService {
         
         logger.info(`Retrieved balances for ${balancesMap.size} bank accounts from BankSummary report`);
       } catch (reportError) {
-        logger.warn('Failed to fetch BankSummary report, balances will default to 0', { 
-          error: reportError instanceof Error ? reportError.message : String(reportError),
-          stack: reportError instanceof Error ? reportError.stack : undefined
-        });
+        const errorDetails: any = {
+          message: reportError instanceof Error ? reportError.message : String(reportError),
+          stack: reportError instanceof Error ? reportError.stack : undefined,
+        };
+        
+        // Try to extract API response details if available
+        if (reportError instanceof Error && (reportError as any).response) {
+          errorDetails.response = {
+            status: (reportError as any).response?.status,
+            statusText: (reportError as any).response?.statusText,
+            data: (reportError as any).response?.data,
+          };
+        }
+        
+        logger.error('Failed to fetch BankSummary report, balances will default to 0', errorDetails);
       }
 
       // Transform to our BankAccount format, merging with balances
