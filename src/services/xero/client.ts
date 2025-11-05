@@ -175,20 +175,25 @@ export class XeroService {
         throw new Error('No tenant ID available');
       }
 
-      // Build where clause to filter by account ID and date range
-      const where = `Account.AccountID=Guid("${accountId}") AND Date >= DateTime(${fromDate}) AND Date <= DateTime(${toDate})`;
+      // Build where clause to filter by account ID only
+      // Note: Xero API date filtering in where clause can be tricky, so we'll filter by date client-side
+      const where = `Account.AccountID=Guid("${accountId}")`;
       
-      // Convert date strings to Date objects for client-side filtering fallback
+      // Convert date strings to Date objects for client-side filtering
       const fromDateObj = new Date(fromDate);
+      fromDateObj.setHours(0, 0, 0, 0); // Start of day
       const toDateObj = new Date(toDate);
+      toDateObj.setHours(23, 59, 59, 999); // End of day
 
       logger.info('Fetching bank transactions', {
         accountId,
         fromDate,
         toDate,
+        where,
       });
 
-      // Get bank transactions for the specified account and date range
+      // Get bank transactions for the specified account
+      // We'll filter by date range client-side since Xero API date filtering can be unreliable
       const response = await this.client.accountingApi.getBankTransactions(
         tenantId,
         undefined, // ifModifiedSince
@@ -200,14 +205,14 @@ export class XeroService {
 
       const transactions = response.body.bankTransactions || [];
 
-      // Client-side filter as fallback (API where clause should handle this, but filter again to be safe)
+      // Filter transactions by date range (client-side filtering)
       const filteredTransactions = transactions.filter((tx: XeroBankTransaction) => {
         if (!tx.date) return false;
         const txDate = new Date(tx.date);
         return txDate >= fromDateObj && txDate <= toDateObj;
       });
 
-      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId}`);
+      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (from ${transactions.length} total)`);
 
       // Transform to our BankTransaction format
       return filteredTransactions.map((tx: XeroBankTransaction) => {
@@ -218,6 +223,9 @@ export class XeroService {
             const amount = item.lineAmount || 0;
             return sum + amount;
           }, 0);
+        } else if (tx.total) {
+          // Fallback to total if line items are not available
+          totalAmount = tx.total;
         }
 
         // Determine if it's a credit or debit based on type
@@ -261,7 +269,24 @@ export class XeroService {
         };
       });
     } catch (error) {
-      logger.error('Failed to fetch bank transactions', { error, accountId });
+      const errorDetails: any = {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        accountId,
+        fromDate,
+        toDate,
+      };
+      
+      // Try to extract API response details if available
+      if (error instanceof Error && (error as any).response) {
+        errorDetails.response = {
+          status: (error as any).response?.status,
+          statusText: (error as any).response?.statusText,
+          data: (error as any).response?.data,
+        };
+      }
+      
+      logger.error('Failed to fetch bank transactions', errorDetails);
       throw error;
     }
   }
