@@ -17,10 +17,10 @@ export function getXeroClient(): XeroClient {
   return xeroClient;
 }
 
-export async function getAuthorizationUrl(): Promise<string> {
+export async function getAuthorizationUrl(state?: string): Promise<string> {
   try {
     const client = getXeroClient();
-    const consentUrl = await client.buildConsentUrl();
+    const consentUrl = await client.buildConsentUrl(state);
     logger.info('Generated Xero authorization URL');
     return consentUrl;
   } catch (error) {
@@ -42,13 +42,14 @@ export async function exchangeCodeForToken(
       redirectUri: config.xero.redirectUri,
     });
     
-    // apiCallback expects the full callback URL with query parameters
+    // apiCallback expects the full callback URL with query parameters and state for validation
     // Construct the full URL that Xero redirected to
     const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
     
     logger.info('Calling apiCallback', { callbackUrl: callbackUrl.substring(0, 100) + '...' });
     
-    const tokenSet = await client.apiCallback(callbackUrl);
+    // apiCallback needs the state parameter for validation
+    const tokenSet = await client.apiCallback(callbackUrl, state);
     
     logger.info('apiCallback completed', { hasTokenSet: !!tokenSet });
     

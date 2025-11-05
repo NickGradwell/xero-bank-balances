@@ -59,14 +59,10 @@ app.get('/auth/xero', async (req, res) => {
     const state = randomUUID();
     req.session.oauthState = state;
 
-    const authUrl = await getAuthorizationUrl();
+    const authUrl = await getAuthorizationUrl(state);
     logger.info('Redirecting to Xero authorization', { state });
 
-    // Add state parameter to the URL if not already present
-    const separator = authUrl.includes('?') ? '&' : '?';
-    const urlWithState = `${authUrl}${separator}state=${state}`;
-
-    res.redirect(urlWithState);
+    res.redirect(authUrl);
   } catch (error) {
     logger.error('Failed to initiate OAuth flow', { error });
     res.status(500).json({ error: 'Failed to initiate authorization' });
@@ -113,10 +109,23 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
     // Redirect to main page
     res.redirect('/');
   } catch (error) {
-    logger.error('OAuth callback failed', { 
-      error: error instanceof Error ? error.message : String(error),
+    // Log the full error details
+    const errorDetails: any = {
+      message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
-    });
+      name: error instanceof Error ? error.name : undefined,
+    };
+    
+    // Try to extract response details if available
+    if (error instanceof Error && (error as any).response) {
+      errorDetails.response = {
+        status: (error as any).response?.status,
+        statusText: (error as any).response?.statusText,
+        data: (error as any).response?.data,
+      };
+    }
+    
+    logger.error('OAuth callback failed', errorDetails);
     res.status(500).send('Authentication failed. Please try again.');
   }
 });
