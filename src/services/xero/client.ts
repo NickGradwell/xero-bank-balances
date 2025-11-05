@@ -344,6 +344,37 @@ export class XeroService {
         return isInDateRange;
       });
       
+      // If where clause returned 0 transactions, try fetching without date filter to see if transactions exist
+      if (where && allTransactions.length === 0) {
+        logger.info(`Where clause returned 0 transactions. Trying fallback: fetch without date filter to check if account has any transactions...`);
+        
+        // Try fetching without date filter - use a very wide date range (last 10 years)
+        // Note: Xero API where clause might support date filtering, but we'll try without first
+        try {
+          const fallbackResponse = await this.client.accountingApi.getBankTransactions(
+            tenantId,
+            undefined,
+            where, // Still use where clause to filter by account
+            'Date DESC',
+            1,
+            undefined
+          );
+          
+          const fallbackTransactions = fallbackResponse.body.bankTransactions || [];
+          if (fallbackTransactions.length > 0) {
+            logger.info(`Fallback query found ${fallbackTransactions.length} transactions for account ${accountId} (without date filter)`);
+            const firstFallbackTx = fallbackTransactions[0];
+            const lastFallbackTx = fallbackTransactions[fallbackTransactions.length - 1];
+            logger.info(`Transaction date range: ${firstFallbackTx.date} to ${lastFallbackTx.date}`);
+            logger.warn(`Account has transactions but none in requested date range: ${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`);
+          } else {
+            logger.warn(`Fallback query also returned 0 transactions - account ${accountId} (${accountName}) appears to have no transactions at all`);
+          }
+        } catch (fallbackError) {
+          logger.error('Fallback query failed', { error: fallbackError });
+        }
+      }
+      
       // Log detailed match information for debugging
       if (filteredTransactions.length === 0 && allTransactions.length > 0) {
         // Check account matches without date filtering
