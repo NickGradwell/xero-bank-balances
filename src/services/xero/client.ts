@@ -175,9 +175,9 @@ export class XeroService {
         throw new Error('No tenant ID available');
       }
 
-      // Build where clause to filter by account ID only
-      // Note: BankTransaction uses BankAccount property, not Account
-      const where = `BankAccount.AccountID=Guid("${accountId}")`;
+      // Try fetching without where clause first - Xero API where clause syntax can be problematic
+      // We'll filter by account ID client-side instead
+      const where = undefined; // Remove where clause temporarily to debug
       
       // Convert date strings to Date objects for client-side filtering
       const fromDateObj = new Date(fromDate);
@@ -189,11 +189,11 @@ export class XeroService {
         accountId,
         fromDate,
         toDate,
-        where,
+        usingWhereClause: !!where,
       });
 
       // Get bank transactions for the specified account
-      // We'll filter by date range client-side since Xero API date filtering can be unreliable
+      // We'll filter by date range and account ID client-side since Xero API filtering can be unreliable
       const response = await this.client.accountingApi.getBankTransactions(
         tenantId,
         undefined, // ifModifiedSince
@@ -203,16 +203,42 @@ export class XeroService {
         undefined // unitdp
       );
 
-      const transactions = response.body.bankTransactions || [];
+      const allTransactions = response.body.bankTransactions || [];
 
-      // Filter transactions by date range (client-side filtering)
-      const filteredTransactions = transactions.filter((tx: XeroBankTransaction) => {
+      logger.info('API response received', {
+        accountId,
+        totalTransactionsReturned: allTransactions.length,
+        firstTransactionDate: allTransactions[0]?.date,
+        lastTransactionDate: allTransactions[allTransactions.length - 1]?.date,
+        sampleTransaction: allTransactions[0] ? {
+          id: allTransactions[0].bankTransactionID,
+          date: allTransactions[0].date,
+          bankAccountId: allTransactions[0].bankAccount?.accountID,
+        } : null,
+      });
+
+      // Filter transactions by account ID and date range (client-side filtering)
+      const filteredTransactions = allTransactions.filter((tx: XeroBankTransaction) => {
+        // Filter by account ID
+        const txAccountId = tx.bankAccount?.accountID;
+        if (!txAccountId || txAccountId !== accountId) {
+          return false;
+        }
+        
+        // Filter by date range
         if (!tx.date) return false;
         const txDate = new Date(tx.date);
         return txDate >= fromDateObj && txDate <= toDateObj;
       });
 
-      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (from ${transactions.length} total)`);
+      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (from ${allTransactions.length} total)`, {
+        dateRange: {
+          from: fromDateObj.toISOString(),
+          to: toDateObj.toISOString(),
+        },
+        filteredCount: filteredTransactions.length,
+        totalCount: allTransactions.length,
+      });
 
       // Transform to our BankTransaction format
       return filteredTransactions.map((tx: XeroBankTransaction) => {
