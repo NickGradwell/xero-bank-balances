@@ -259,26 +259,50 @@ export class XeroService {
           return false;
         }
         
-        // Filter by date range
+        // Filter by date range - but log if transactions are being filtered out due to date
         if (!tx.date) return false;
         const txDate = new Date(tx.date);
-        return txDate >= fromDateObj && txDate <= toDateObj;
+        const isInDateRange = txDate >= fromDateObj && txDate <= toDateObj;
+        
+        // Log if transaction matches account but is outside date range
+        if (!isInDateRange && accountMatches) {
+          logger.debug(`Transaction matched account but outside date range`, {
+            txDate: txDate.toISOString(),
+            dateRange: `${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`,
+            accountName: txAccountName,
+          });
+        }
+        
+        return isInDateRange;
       });
       
       // Log detailed match information for debugging
       if (filteredTransactions.length === 0 && allTransactions.length > 0) {
-        const accountNameMatches = allTransactions.filter((tx: XeroBankTransaction) => {
+        // Check account matches without date filtering
+        const accountMatches = allTransactions.filter((tx: XeroBankTransaction) => {
+          const txAccountId = tx.bankAccount?.accountID;
           const txAccountName = tx.bankAccount?.name;
-          if (!txAccountName || !accountName) return false;
-          const normalizedTxName = txAccountName.toLowerCase().trim();
-          const normalizedAccountName = accountName.toLowerCase().trim();
-          return normalizedTxName.includes(normalizedAccountName) || 
-                 normalizedAccountName.includes(normalizedTxName);
+          
+          let matches = false;
+          if (txAccountId) {
+            matches = txAccountId.toLowerCase().trim() === accountId.toLowerCase().trim();
+          }
+          
+          if (!matches && txAccountName && accountName) {
+            const normalizedTxName = txAccountName.toLowerCase().trim();
+            const normalizedAccountName = accountName.toLowerCase().trim();
+            matches = normalizedTxName === normalizedAccountName ||
+                     normalizedTxName.includes(normalizedAccountName) || 
+                     normalizedAccountName.includes(normalizedTxName);
+          }
+          return matches;
         });
         
-        logger.info(`No exact matches found. Potential name matches: ${accountNameMatches.length}`, {
+        logger.info(`No transactions found after filtering. Account matches (without date filter): ${accountMatches.length}`, {
           requestedName: accountName,
-          matchingNames: accountNameMatches.slice(0, 5).map((tx: XeroBankTransaction) => ({
+          requestedAccountId: accountId,
+          dateRange: `${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`,
+          matchingTransactions: accountMatches.slice(0, 5).map((tx: XeroBankTransaction) => ({
             name: tx.bankAccount?.name,
             date: tx.date,
             accountId: tx.bankAccount?.accountID,
