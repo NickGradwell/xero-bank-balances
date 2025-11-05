@@ -66,8 +66,17 @@ export async function refreshAccessToken(refreshToken: string): Promise<XeroToke
       refresh_token: refreshToken,
     } as any);
     
-    // Refresh the token
-    await client.refreshWithRefreshToken();
+    // Refresh the token - need to pass tenantId, redirectUri, and scope
+    const tenantId = client.tenants?.[0]?.tenantId || '';
+    if (!tenantId) {
+      throw new Error('No tenant ID available for token refresh');
+    }
+    
+    await client.refreshWithRefreshToken(
+      tenantId,
+      config.xero.redirectUri,
+      config.xero.scopes.join(' ')
+    );
     await client.updateTenants();
     
     // Get the updated token set
@@ -76,7 +85,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<XeroToke
       throw new Error('Token refresh failed - no token set returned');
     }
 
-    const tenantId = client.tenants?.[0]?.tenantId || (tokenSet.tenantId || '');
+    const updatedTenantId = client.tenants?.[0]?.tenantId || (tokenSet.tenantId || '');
 
     logger.info('Successfully refreshed access token');
 
@@ -85,7 +94,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<XeroToke
       refresh_token: tokenSet.refresh_token || '',
       expires_at: tokenSet.expires_at || 0,
       token_type: tokenSet.token_type || 'Bearer',
-      xero_tenant_id: tenantId,
+      xero_tenant_id: updatedTenantId,
     };
   } catch (error) {
     logger.error('Failed to refresh access token', { error });
