@@ -24,6 +24,18 @@ export interface XeroTokenSet {
   xero_tenant_id: string;
 }
 
+export interface BankAccount {
+  accountId: string;
+  code: string;
+  name: string;
+  bankAccountNumber?: string;
+  status: string;
+  currencyCode: string;
+  balance: number;
+  balanceFormatted: string;
+  updatedDateUTC?: string;
+}
+
 export interface BankTransaction {
   transactionId: string;
   date: string;

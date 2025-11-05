@@ -221,11 +221,14 @@ export class XeroService {
         }
 
         // Determine if it's a credit or debit based on type
-        const isCredit = tx.type === 'RECEIVE' || tx.type === 'RECEIVE-OVERPAYMENT' || tx.type === 'RECEIVE-PREPAYMENT';
+        // Convert enum to string for comparison
+        const txTypeStr = tx.type ? String(tx.type) : '';
+        const isCredit = txTypeStr === 'RECEIVE' || txTypeStr === 'RECEIVE-OVERPAYMENT' || txTypeStr === 'RECEIVE-PREPAYMENT';
         const displayAmount = isCredit ? Math.abs(totalAmount) : -Math.abs(totalAmount);
 
-        // Get currency code from account or default
-        const currencyCode = tx.currencyCode || 'USD';
+        // Get currency code from transaction or default
+        // Convert enum to string if needed
+        const currencyCode = tx.currencyCode ? String(tx.currencyCode) : 'USD';
 
         // Format amount
         const formattedAmount = new Intl.NumberFormat('en-US', {
@@ -241,7 +244,7 @@ export class XeroService {
           description = tx.lineItems[0].description || '';
         }
         if (!description) {
-          description = tx.type || 'Transaction';
+          description = txTypeStr || 'Transaction';
         }
 
         return {
@@ -251,7 +254,7 @@ export class XeroService {
           reference: tx.reference,
           amount: displayAmount,
           amountFormatted: formattedAmount,
-          type: tx.type || '',
+          type: txTypeStr,
           status: tx.status ? String(tx.status) : 'AUTHORISED',
           contactName: tx.contact?.name,
           isReconciled: tx.isReconciled || false,
