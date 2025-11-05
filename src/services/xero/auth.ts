@@ -31,8 +31,7 @@ export async function getAuthorizationUrl(): Promise<string> {
 
 export async function exchangeCodeForToken(
   code: string,
-  state: string,
-  req?: any
+  state: string
 ): Promise<XeroTokenSet> {
   try {
     const client = getXeroClient();

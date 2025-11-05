@@ -99,8 +99,8 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
       return;
     }
 
-    // Exchange code for token - pass the request object if apiCallback supports it
-    const tokenSet = await exchangeCodeForToken(code, state as string, req);
+    // Exchange code for token
+    const tokenSet = await exchangeCodeForToken(code, state as string);
 
     // Store token set in session
     req.session.xeroTokenSet = tokenSet;
