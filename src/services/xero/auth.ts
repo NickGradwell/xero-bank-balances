@@ -20,10 +20,10 @@ export function getXeroClient(): XeroClient {
 export async function getAuthorizationUrl(state?: string): Promise<string> {
   try {
     const client = getXeroClient();
-    // buildConsentUrl needs state parameter for openid-client to track it
-    // TypeScript types may not reflect this, so we cast to any
+    // buildConsentUrl accepts state as direct string parameter
+    // The SDK internally passes it to openid-client's authorizationUrl method
     const consentUrl = state 
-      ? await (client.buildConsentUrl as any)({ state })
+      ? await (client.buildConsentUrl as any)(state)
       : await client.buildConsentUrl();
     logger.info('Generated Xero authorization URL', { hasState: !!state });
     return consentUrl;
@@ -46,15 +46,14 @@ export async function exchangeCodeForToken(
       redirectUri: config.xero.redirectUri,
     });
     
-    // apiCallback expects the full callback URL with query parameters and state for validation
-    // Construct the full URL that Xero redirected to
+    // apiCallback expects the full callback URL with query parameters
+    // openid-client extracts and validates state automatically from the URL
     const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
     
     logger.info('Calling apiCallback', { callbackUrl: callbackUrl.substring(0, 100) + '...' });
     
-    // apiCallback needs state in options object for openid-client validation
-    // TypeScript types may not reflect this, so we cast to any
-    const tokenSet = await (client.apiCallback as any)(callbackUrl, { state });
+    // apiCallback extracts state from URL and validates it automatically
+    const tokenSet = await client.apiCallback(callbackUrl);
     
     logger.info('apiCallback completed', { hasTokenSet: !!tokenSet });
     

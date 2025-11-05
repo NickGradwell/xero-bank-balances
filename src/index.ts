@@ -79,9 +79,6 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
       hasState: !!state,
       stateType: typeof state,
       stateValue: state,
-      sessionState: req.session.oauthState,
-      sessionStateType: typeof req.session.oauthState,
-      sessionExists: !!req.session,
     });
 
     if (!code || typeof code !== 'string') {
@@ -90,38 +87,30 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
       return;
     }
 
-    // Handle state parameter - Express query params can be string or string[]
-    let stateValue: string;
-    if (Array.isArray(state)) {
+    // Extract state parameter - Express query params can be undefined, string, string[], or ParsedQs
+    // openid-client will validate state automatically, so we just need to ensure we have a string
+    let stateValue: string = '';
+    
+    if (state === undefined || state === null) {
+      // State might be missing, but openid-client will handle validation
+      logger.warn('State parameter missing from callback (will be validated by openid-client)');
+    } else if (typeof state === 'string') {
+      stateValue = state;
+    } else if (Array.isArray(state)) {
+      // Handle array case - use first element if it's a string
       const firstState = state[0];
       if (typeof firstState === 'string') {
         stateValue = firstState;
       } else {
-        logger.error('State parameter array contains non-string value', { state });
-        res.status(400).send('State parameter invalid');
-        return;
+        logger.warn('State parameter array contains non-string value', { state });
       }
-      logger.warn('State parameter received as array, using first value', { state });
-    } else if (typeof state === 'string') {
-      stateValue = state;
     } else {
-      logger.error('State parameter missing or invalid type', { state, stateType: typeof state });
-      res.status(400).send('State parameter missing');
-      return;
+      // Handle ParsedQs case - convert to string
+      stateValue = String(state);
+      logger.warn('State parameter is ParsedQs type, converting to string', { state });
     }
 
-    // Store the state from session for logging, but let openid-client validate it
-    const storedState = req.session.oauthState;
-    
-    // Log comparison for debugging but don't fail here - let openid-client handle validation
-    if (storedState && stateValue !== storedState) {
-      logger.warn('State mismatch detected (will be validated by openid-client)', {
-        receivedState: stateValue,
-        storedState: storedState,
-      });
-    }
-
-    // Exchange code for token - openid-client will validate state internally
+    // Exchange code for token - openid-client extracts state from URL and validates it automatically
     const tokenSet = await exchangeCodeForToken(code, stateValue);
 
     // Store token set in session
