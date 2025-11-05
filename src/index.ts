@@ -90,8 +90,15 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
       return;
     }
 
-    if (!state || typeof state !== 'string') {
-      logger.error('State parameter missing or invalid', { state });
+    // Handle state parameter - Express query params can be string or string[]
+    let stateValue: string;
+    if (Array.isArray(state)) {
+      stateValue = state[0];
+      logger.warn('State parameter received as array, using first value', { state });
+    } else if (typeof state === 'string') {
+      stateValue = state;
+    } else {
+      logger.error('State parameter missing or invalid type', { state, stateType: typeof state });
       res.status(400).send('State parameter missing');
       return;
     }
@@ -100,15 +107,15 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
     const storedState = req.session.oauthState;
     
     // Log comparison for debugging but don't fail here - let openid-client handle validation
-    if (storedState && state !== storedState) {
+    if (storedState && stateValue !== storedState) {
       logger.warn('State mismatch detected (will be validated by openid-client)', {
-        receivedState: state,
+        receivedState: stateValue,
         storedState: storedState,
       });
     }
 
     // Exchange code for token - openid-client will validate state internally
-    const tokenSet = await exchangeCodeForToken(code, state);
+    const tokenSet = await exchangeCodeForToken(code, stateValue);
 
     // Store token set in session
     req.session.xeroTokenSet = tokenSet;
