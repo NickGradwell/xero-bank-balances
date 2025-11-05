@@ -37,22 +37,28 @@ export async function exchangeCodeForToken(
   try {
     const client = getXeroClient();
     
-    // apiCallback can accept either a URL string or the request object
-    // Try with the request object first if available, otherwise use URL string
-    let tokenSet;
-    if (req) {
-      tokenSet = await client.apiCallback(req);
-    } else {
-      const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
-      tokenSet = await client.apiCallback(callbackUrl);
-    }
+    logger.info('Attempting token exchange', {
+      hasCode: !!code,
+      hasState: !!state,
+      redirectUri: config.xero.redirectUri,
+    });
+    
+    // apiCallback expects the full callback URL with query parameters
+    // Construct the full URL that Xero redirected to
+    const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
+    
+    logger.info('Calling apiCallback', { callbackUrl: callbackUrl.substring(0, 100) + '...' });
+    
+    const tokenSet = await client.apiCallback(callbackUrl);
+    
+    logger.info('apiCallback completed', { hasTokenSet: !!tokenSet });
     
     await client.updateTenants();
     
     const tenantId = client.tenants?.[0]?.tenantId || '';
     
     if (!tokenSet) {
-      throw new Error('Token set is null or undefined');
+      throw new Error('Token set is null or undefined after apiCallback');
     }
 
     logger.info('Successfully exchanged code for token', {
@@ -69,10 +75,23 @@ export async function exchangeCodeForToken(
       xero_tenant_id: tenantId,
     };
   } catch (error) {
-    logger.error('Failed to exchange code for token', { 
-      error: error instanceof Error ? error.message : String(error),
+    // Log the full error details
+    const errorDetails: any = {
+      message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
-    });
+      name: error instanceof Error ? error.name : undefined,
+    };
+    
+    // Try to extract response details if available
+    if (error instanceof Error && (error as any).response) {
+      errorDetails.response = {
+        status: (error as any).response?.status,
+        statusText: (error as any).response?.statusText,
+        data: (error as any).response?.data,
+      };
+    }
+    
+    logger.error('Failed to exchange code for token', errorDetails);
     throw error;
   }
 }
