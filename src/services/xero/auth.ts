@@ -20,8 +20,15 @@ export function getXeroClient(): XeroClient {
 export async function getAuthorizationUrl(state?: string): Promise<string> {
   try {
     const client = getXeroClient();
-    const consentUrl = await client.buildConsentUrl(state);
+    const consentUrl = await client.buildConsentUrl();
     logger.info('Generated Xero authorization URL');
+    
+    // Add state parameter if provided
+    if (state) {
+      const separator = consentUrl.includes('?') ? '&' : '?';
+      return `${consentUrl}${separator}state=${encodeURIComponent(state)}`;
+    }
+    
     return consentUrl;
   } catch (error) {
     logger.error('Failed to generate authorization URL', { error });
@@ -42,14 +49,14 @@ export async function exchangeCodeForToken(
       redirectUri: config.xero.redirectUri,
     });
     
-    // apiCallback expects the full callback URL with query parameters and state for validation
+    // apiCallback expects the full callback URL with query parameters
     // Construct the full URL that Xero redirected to
     const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
     
     logger.info('Calling apiCallback', { callbackUrl: callbackUrl.substring(0, 100) + '...' });
     
-    // apiCallback needs the state parameter for validation
-    const tokenSet = await client.apiCallback(callbackUrl, state);
+    // apiCallback only takes the callback URL (state validation is handled separately)
+    const tokenSet = await client.apiCallback(callbackUrl);
     
     logger.info('apiCallback completed', { hasTokenSet: !!tokenSet });
     
