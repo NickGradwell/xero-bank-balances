@@ -214,14 +214,35 @@ export class XeroService {
           id: allTransactions[0].bankTransactionID,
           date: allTransactions[0].date,
           bankAccountId: allTransactions[0].bankAccount?.accountID,
+          bankAccountName: allTransactions[0].bankAccount?.name,
+          bankAccountCode: allTransactions[0].bankAccount?.code,
+          fullBankAccount: allTransactions[0].bankAccount,
         } : null,
+        accountIdsInTransactions: allTransactions.slice(0, 5).map((tx: XeroBankTransaction) => ({
+          date: tx.date,
+          bankAccountId: tx.bankAccount?.accountID,
+          bankAccountName: tx.bankAccount?.name,
+        })),
       });
 
       // Filter transactions by account ID and date range (client-side filtering)
       const filteredTransactions = allTransactions.filter((tx: XeroBankTransaction) => {
         // Filter by account ID
         const txAccountId = tx.bankAccount?.accountID;
-        if (!txAccountId || txAccountId !== accountId) {
+        
+        if (!txAccountId) {
+          logger.debug('Transaction missing bank account ID', {
+            transactionId: tx.bankTransactionID,
+            date: tx.date,
+            bankAccount: tx.bankAccount,
+          });
+          return false;
+        }
+        
+        // Compare account IDs (case-insensitive, trim whitespace)
+        const accountIdMatch = txAccountId.toLowerCase().trim() === accountId.toLowerCase().trim();
+        
+        if (!accountIdMatch) {
           return false;
         }
         
@@ -238,6 +259,10 @@ export class XeroService {
         },
         filteredCount: filteredTransactions.length,
         totalCount: allTransactions.length,
+        matchingAccountIds: Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.accountID
+        ).filter(Boolean))).slice(0, 10),
+        requestedAccountId: accountId,
       });
 
       // Transform to our BankTransaction format
