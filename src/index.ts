@@ -192,6 +192,74 @@ app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   }
 });
 
+// API endpoint to get bank transactions for a specific account
+app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<void> => {
+  try {
+    const tokenSet = req.session.xeroTokenSet;
+
+    if (!tokenSet) {
+      res.status(401).json({
+        error: 'Not authenticated',
+        requiresAuth: true,
+      });
+      return;
+    }
+
+    const { accountId } = req.params;
+    const month = req.query.month ? parseInt(req.query.month as string, 10) : new Date().getMonth() + 1;
+    const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
+
+    // Validate month and year
+    if (month < 1 || month > 12) {
+      res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
+      return;
+    }
+
+    if (year < 2000 || year > 2100) {
+      res.status(400).json({ error: 'Invalid year.' });
+      return;
+    }
+
+    // Calculate date range for the selected month
+    const fromDate = new Date(year, month - 1, 1);
+    const toDate = new Date(year, month, 0); // Last day of the month
+
+    // Format dates as YYYY-MM-DD
+    const formatDate = (date: Date): string => {
+      return date.toISOString().split('T')[0];
+    };
+
+    const xeroService = new XeroService(tokenSet);
+    const transactions = await xeroService.getBankTransactions(
+      tokenSet,
+      accountId,
+      formatDate(fromDate),
+      formatDate(toDate)
+    );
+
+    // Update session with potentially refreshed token
+    const updatedTokenSet = req.session.xeroTokenSet;
+    if (updatedTokenSet && updatedTokenSet !== tokenSet) {
+      req.session.xeroTokenSet = updatedTokenSet;
+    }
+
+    res.json({
+      transactions: transactions,
+      count: transactions.length,
+      month: month,
+      year: year,
+      fromDate: formatDate(fromDate),
+      toDate: formatDate(toDate),
+    });
+  } catch (error) {
+    logger.error('Failed to fetch bank transactions', { error });
+    res.status(500).json({
+      error: 'Failed to fetch bank transactions',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 // Check authentication status
 app.get('/api/auth/status', (req, res) => {
   const tokenSet = req.session.xeroTokenSet;

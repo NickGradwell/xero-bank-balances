@@ -77,6 +77,105 @@
             <h2 class="text-2xl font-semibold text-gray-800 mb-2">No Bank Accounts Found</h2>
             <p class="text-gray-600">No bank accounts are currently connected to your Xero account.</p>
         </div>
+
+        <!-- Transactions Modal -->
+        <div id="transactionsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                <!-- Modal Header -->
+                <div class="flex items-center justify-between p-6 border-b border-gray-200">
+                    <div>
+                        <h2 id="modalAccountName" class="text-2xl font-semibold text-gray-800"></h2>
+                        <p id="modalAccountCode" class="text-sm text-gray-500 mt-1"></p>
+                    </div>
+                    <button onclick="closeTransactionsModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+
+                <!-- Date Selector -->
+                <div class="p-6 border-b border-gray-200 bg-gray-50">
+                    <div class="flex items-center gap-4 flex-wrap">
+                        <div class="flex items-center gap-2">
+                            <label class="text-sm font-medium text-gray-700">Month:</label>
+                            <select id="monthSelect" onchange="onDateChange()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="1">January</option>
+                                <option value="2">February</option>
+                                <option value="3">March</option>
+                                <option value="4">April</option>
+                                <option value="5">May</option>
+                                <option value="6">June</option>
+                                <option value="7">July</option>
+                                <option value="8">August</option>
+                                <option value="9">September</option>
+                                <option value="10">October</option>
+                                <option value="11">November</option>
+                                <option value="12">December</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-sm font-medium text-gray-700">Year:</label>
+                            <select id="yearSelect" onchange="onDateChange()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <!-- Years will be populated by JavaScript -->
+                            </select>
+                        </div>
+                        <button onclick="setCurrentMonth()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                            <i class="fas fa-calendar-alt mr-1"></i>Current Month
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Transactions Content -->
+                <div class="flex-1 overflow-y-auto p-6">
+                    <!-- Loading State -->
+                    <div id="transactionsLoading" class="hidden text-center py-12">
+                        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
+                        <p class="text-gray-600">Loading transactions...</p>
+                    </div>
+
+                    <!-- Error State -->
+                    <div id="transactionsError" class="hidden bg-red-50 border border-red-200 rounded-lg p-6 mb-6">
+                        <div class="flex items-center">
+                            <i class="fas fa-exclamation-circle text-red-600 text-xl mr-3"></i>
+                            <div>
+                                <h3 class="text-lg font-semibold text-red-800">Error</h3>
+                                <p id="transactionsErrorMessage" class="text-red-600"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Transactions Table -->
+                    <div id="transactionsContainer" class="hidden">
+                        <div class="mb-4 text-sm text-gray-600">
+                            <span id="transactionsCount">0</span> transactions found
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
+                                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="transactionsTableBody" class="bg-white divide-y divide-gray-200">
+                                    <!-- Transactions will be inserted here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- No Transactions State -->
+                    <div id="noTransactionsState" class="hidden text-center py-12">
+                        <i class="fas fa-receipt text-6xl text-gray-400 mb-4"></i>
+                        <h3 class="text-xl font-semibold text-gray-800 mb-2">No Transactions Found</h3>
+                        <p class="text-gray-600">No transactions found for the selected period.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -144,7 +243,7 @@
             countElement.textContent = accounts.length;
 
             grid.innerHTML = accounts.map(account => `
-                <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div onclick="showTransactions('${escapeHtml(account.accountId)}', '${escapeHtml(account.name)}', '${escapeHtml(account.code)}')" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow cursor-pointer">
                     <div class="flex items-center justify-between mb-4">
                         <div class="flex items-center">
                             <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mr-3">
@@ -182,6 +281,9 @@
                         <div class="text-xs text-gray-500 mt-2">
                             <i class="fas fa-coins mr-1"></i>
                             ${escapeHtml(account.currencyCode)}
+                        </div>
+                        <div class="text-xs text-blue-600 mt-3 font-medium">
+                            <i class="fas fa-eye mr-1"></i>Click to view transactions
                         </div>
                     </div>
                 </div>
@@ -239,8 +341,172 @@
             }
         }
 
+        // Transactions modal state
+        let currentAccountId = null;
+        let currentAccountName = '';
+        let currentAccountCode = '';
+
+        // Initialize year dropdown
+        function initializeYearDropdown() {
+            const yearSelect = document.getElementById('yearSelect');
+            const currentYear = new Date().getFullYear();
+            const startYear = 2020;
+            const endYear = currentYear + 5;
+            
+            yearSelect.innerHTML = '';
+            for (let year = endYear; year >= startYear; year--) {
+                const option = document.createElement('option');
+                option.value = year;
+                option.textContent = year;
+                if (year === currentYear) {
+                    option.selected = true;
+                }
+                yearSelect.appendChild(option);
+            }
+        }
+
+        // Set month/year to current month
+        function setCurrentMonth() {
+            const now = new Date();
+            document.getElementById('monthSelect').value = now.getMonth() + 1;
+            document.getElementById('yearSelect').value = now.getFullYear();
+            onDateChange();
+        }
+
+        // Show transactions modal
+        function showTransactions(accountId, accountName, accountCode) {
+            currentAccountId = accountId;
+            currentAccountName = accountName;
+            currentAccountCode = accountCode;
+            
+            document.getElementById('modalAccountName').textContent = accountName;
+            document.getElementById('modalAccountCode').textContent = `Account Code: ${accountCode}`;
+            
+            // Set to current month/year
+            setCurrentMonth();
+            
+            // Show modal
+            document.getElementById('transactionsModal').classList.remove('hidden');
+            
+            // Load transactions
+            loadTransactions();
+        }
+
+        // Close transactions modal
+        function closeTransactionsModal() {
+            document.getElementById('transactionsModal').classList.add('hidden');
+            currentAccountId = null;
+        }
+
+        // Handle date change
+        function onDateChange() {
+            if (currentAccountId) {
+                loadTransactions();
+            }
+        }
+
+        // Load transactions for selected account and date
+        async function loadTransactions() {
+            if (!currentAccountId) return;
+
+            const month = document.getElementById('monthSelect').value;
+            const year = document.getElementById('yearSelect').value;
+            
+            const loadingState = document.getElementById('transactionsLoading');
+            const transactionsContainer = document.getElementById('transactionsContainer');
+            const noTransactionsState = document.getElementById('noTransactionsState');
+            const errorState = document.getElementById('transactionsError');
+            const errorMessage = document.getElementById('transactionsErrorMessage');
+
+            // Hide all states
+            loadingState.classList.remove('hidden');
+            transactionsContainer.classList.add('hidden');
+            noTransactionsState.classList.add('hidden');
+            errorState.classList.add('hidden');
+
+            try {
+                const response = await fetch(`/api/xero/accounts/${currentAccountId}/transactions?month=${month}&year=${year}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.message || 'Failed to fetch transactions');
+                }
+
+                loadingState.classList.add('hidden');
+
+                if (data.transactions && data.transactions.length > 0) {
+                    displayTransactions(data.transactions);
+                    document.getElementById('transactionsCount').textContent = data.count;
+                    transactionsContainer.classList.remove('hidden');
+                } else {
+                    noTransactionsState.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Error loading transactions', error);
+                loadingState.classList.add('hidden');
+                errorState.classList.remove('hidden');
+                errorMessage.textContent = error.message || 'Failed to load transactions. Please try again.';
+            }
+        }
+
+        // Display transactions
+        function displayTransactions(transactions) {
+            const tbody = document.getElementById('transactionsTableBody');
+            
+            tbody.innerHTML = transactions.map(tx => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        ${formatTransactionDate(tx.date)}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-900">
+                        ${escapeHtml(tx.description)}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-500">
+                        ${tx.reference ? escapeHtml(tx.reference) : '-'}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-500">
+                        ${tx.contactName ? escapeHtml(tx.contactName) : '-'}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${
+                        tx.amount >= 0 ? 'text-green-600' : 'text-red-600'
+                    }">
+                        ${tx.amountFormatted}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            tx.isReconciled 
+                                ? 'bg-green-100 text-green-800' 
+                                : 'bg-gray-100 text-gray-800'
+                        }">
+                            ${tx.isReconciled ? 'Reconciled' : 'Unreconciled'}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Format transaction date
+        function formatTransactionDate(dateString) {
+            if (!dateString) return '-';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric' 
+            });
+        }
+
+        // Close modal when clicking outside
+        document.addEventListener('click', (e) => {
+            const modal = document.getElementById('transactionsModal');
+            if (e.target === modal) {
+                closeTransactionsModal();
+            }
+        });
+
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', async () => {
+            initializeYearDropdown();
             await updateAuthSection();
             const isAuthenticated = await checkAuthStatus();
             

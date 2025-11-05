@@ -1,6 +1,6 @@
-import { XeroClient, Account, AccountType } from 'xero-node';
+import { XeroClient, Account, AccountType, BankTransaction as XeroBankTransaction } from 'xero-node';
 import { logger } from '../../utils/logger';
-import { BankAccount } from '../../types/xero';
+import { BankAccount, BankTransaction } from '../../types/xero';
 import { getXeroClient, setTokenSet, isTokenExpired, refreshAccessToken } from './auth';
 import { XeroTokenSet } from '../../types/xero';
 
@@ -155,6 +155,110 @@ export class XeroService {
       });
     } catch (error) {
       logger.error('Failed to fetch bank accounts', { error });
+      throw error;
+    }
+  }
+
+  async getBankTransactions(
+    tokenSet: XeroTokenSet,
+    accountId: string,
+    fromDate: string,
+    toDate: string
+  ): Promise<BankTransaction[]> {
+    try {
+      // Ensure token is valid
+      const validTokenSet = await this.ensureValidToken(tokenSet);
+      await setTokenSet(validTokenSet);
+
+      const tenantId = validTokenSet.xero_tenant_id;
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+
+      // Build where clause to filter by account ID and date range
+      const where = `Account.AccountID=Guid("${accountId}") AND Date >= DateTime(${fromDate}) AND Date <= DateTime(${toDate})`;
+      
+      // Convert date strings to Date objects for client-side filtering fallback
+      const fromDateObj = new Date(fromDate);
+      const toDateObj = new Date(toDate);
+
+      logger.info('Fetching bank transactions', {
+        accountId,
+        fromDate,
+        toDate,
+      });
+
+      // Get bank transactions for the specified account and date range
+      const response = await this.client.accountingApi.getBankTransactions(
+        tenantId,
+        undefined, // ifModifiedSince
+        where,
+        'Date DESC', // order by date descending
+        undefined, // page
+        undefined // unitdp
+      );
+
+      const transactions = response.body.bankTransactions || [];
+
+      // Client-side filter as fallback (API where clause should handle this, but filter again to be safe)
+      const filteredTransactions = transactions.filter((tx: XeroBankTransaction) => {
+        if (!tx.date) return false;
+        const txDate = new Date(tx.date);
+        return txDate >= fromDateObj && txDate <= toDateObj;
+      });
+
+      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId}`);
+
+      // Transform to our BankTransaction format
+      return filteredTransactions.map((tx: XeroBankTransaction) => {
+        // Calculate total amount (sum of line items)
+        let totalAmount = 0;
+        if (tx.lineItems && tx.lineItems.length > 0) {
+          totalAmount = tx.lineItems.reduce((sum, item) => {
+            const amount = item.lineAmount || 0;
+            return sum + amount;
+          }, 0);
+        }
+
+        // Determine if it's a credit or debit based on type
+        const isCredit = tx.type === 'RECEIVE' || tx.type === 'RECEIVE-OVERPAYMENT' || tx.type === 'RECEIVE-PREPAYMENT';
+        const displayAmount = isCredit ? Math.abs(totalAmount) : -Math.abs(totalAmount);
+
+        // Get currency code from account or default
+        const currencyCode = tx.currencyCode || 'USD';
+
+        // Format amount
+        const formattedAmount = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: currencyCode,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(displayAmount);
+
+        // Get description from reference or first line item
+        let description = tx.reference || '';
+        if (!description && tx.lineItems && tx.lineItems.length > 0) {
+          description = tx.lineItems[0].description || '';
+        }
+        if (!description) {
+          description = tx.type || 'Transaction';
+        }
+
+        return {
+          transactionId: tx.bankTransactionID || '',
+          date: tx.date ? new Date(tx.date).toISOString().split('T')[0] : '',
+          description: description,
+          reference: tx.reference,
+          amount: displayAmount,
+          amountFormatted: formattedAmount,
+          type: tx.type || '',
+          status: tx.status ? String(tx.status) : 'AUTHORISED',
+          contactName: tx.contact?.name,
+          isReconciled: tx.isReconciled || false,
+        };
+      });
+    } catch (error) {
+      logger.error('Failed to fetch bank transactions', { error, accountId });
       throw error;
     }
   }
