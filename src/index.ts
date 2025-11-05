@@ -206,6 +206,7 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
     }
 
     const { accountId } = req.params;
+    const accountName = req.query.accountName as string | undefined;
     const month = req.query.month ? parseInt(req.query.month as string, 10) : new Date().getMonth() + 1;
     const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
 
@@ -233,6 +234,7 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
     const transactions = await xeroService.getBankTransactions(
       tokenSet,
       accountId,
+      accountName || '',
       formatDate(fromDate),
       formatDate(toDate)
     );

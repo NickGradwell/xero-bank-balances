@@ -425,7 +425,7 @@
             errorState.classList.add('hidden');
 
             try {
-                const response = await fetch(`/api/xero/accounts/${currentAccountId}/transactions?month=${month}&year=${year}`);
+                const response = await fetch(`/api/xero/accounts/${currentAccountId}/transactions?month=${month}&year=${year}&accountName=${encodeURIComponent(currentAccountName)}`);
                 const data = await response.json();
 
                 if (!response.ok) {
