@@ -20,15 +20,12 @@ export function getXeroClient(): XeroClient {
 export async function getAuthorizationUrl(state?: string): Promise<string> {
   try {
     const client = getXeroClient();
-    const consentUrl = await client.buildConsentUrl();
-    logger.info('Generated Xero authorization URL');
-    
-    // Add state parameter if provided
-    if (state) {
-      const separator = consentUrl.includes('?') ? '&' : '?';
-      return `${consentUrl}${separator}state=${encodeURIComponent(state)}`;
-    }
-    
+    // buildConsentUrl needs state parameter for openid-client to track it
+    // TypeScript types may not reflect this, so we cast to any
+    const consentUrl = state 
+      ? await (client.buildConsentUrl as any)({ state })
+      : await client.buildConsentUrl();
+    logger.info('Generated Xero authorization URL', { hasState: !!state });
     return consentUrl;
   } catch (error) {
     logger.error('Failed to generate authorization URL', { error });
