@@ -204,26 +204,29 @@ export class XeroService {
       );
 
       const allTransactions = response.body.bankTransactions || [];
-
-      const lastTx = allTransactions.length > 0 ? allTransactions[allTransactions.length - 1] : null;
-      logger.info('API response received', {
-        accountId,
-        totalTransactionsReturned: allTransactions.length,
-        firstTransactionDate: allTransactions[0]?.date ? new Date(allTransactions[0].date).toISOString() : null,
-        lastTransactionDate: lastTx?.date ? new Date(lastTx.date).toISOString() : null,
-        sampleTransaction: allTransactions[0] ? JSON.stringify({
-          id: allTransactions[0].bankTransactionID,
-          date: allTransactions[0].date,
-          bankAccountId: allTransactions[0].bankAccount?.accountID,
-          bankAccountName: allTransactions[0].bankAccount?.name,
-          bankAccountCode: allTransactions[0].bankAccount?.code,
-        }) : null,
-        accountIdsInTransactions: JSON.stringify(allTransactions.slice(0, 5).map((tx: XeroBankTransaction) => ({
+      
+      // Log detailed information about the API response
+      logger.info(`API response received: ${allTransactions.length} total transactions for account ${accountId}`);
+      
+      if (allTransactions.length > 0) {
+        const firstTx = allTransactions[0];
+        logger.info(`First transaction: date=${firstTx.date}, bankAccountId=${firstTx.bankAccount?.accountID}, bankAccountName=${firstTx.bankAccount?.name}`);
+        
+        // Log account IDs from first 5 transactions
+        const accountIds = allTransactions.slice(0, 5).map((tx: XeroBankTransaction) => ({
           date: tx.date,
           bankAccountId: tx.bankAccount?.accountID,
           bankAccountName: tx.bankAccount?.name,
-        }))),
-      });
+        }));
+        logger.info(`First 5 transaction account IDs: ${JSON.stringify(accountIds)}`);
+        
+        // Log all unique account IDs
+        const uniqueAccountIds = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.accountID
+        ).filter(Boolean)));
+        logger.info(`Unique account IDs in transactions (${uniqueAccountIds.length}): ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
+        logger.info(`Requested account ID: ${accountId}`);
+      }
 
       // Filter transactions by account ID and date range (client-side filtering)
       const filteredTransactions = allTransactions.filter((tx: XeroBankTransaction) => {
@@ -252,18 +255,16 @@ export class XeroService {
         return txDate >= fromDateObj && txDate <= toDateObj;
       });
 
-      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (from ${allTransactions.length} total)`, {
-        dateRange: {
-          from: fromDateObj.toISOString(),
-          to: toDateObj.toISOString(),
-        },
-        filteredCount: filteredTransactions.length,
-        totalCount: allTransactions.length,
-        matchingAccountIds: JSON.stringify(Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-          tx.bankAccount?.accountID
-        ).filter(Boolean))).slice(0, 10)),
-        requestedAccountId: accountId,
-      });
+      logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (from ${allTransactions.length} total)`);
+      
+      // Log detailed filtering results
+      const uniqueAccountIds = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+        tx.bankAccount?.accountID
+      ).filter(Boolean)));
+      logger.info(`Date range: ${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`);
+      logger.info(`Account IDs found in transactions: ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
+      logger.info(`Requested account ID: ${accountId}`);
+      logger.info(`Match found: ${uniqueAccountIds.includes(accountId)}`);
 
       // Transform to our BankTransaction format
       return filteredTransactions.map((tx: XeroBankTransaction) => {
