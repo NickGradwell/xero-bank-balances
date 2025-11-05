@@ -41,7 +41,7 @@ export class XeroService {
 
       // Filter for bank accounts only - AccountType enum comparison
       const bankAccounts = accounts.filter(
-        (account: Account) => account.type === Account.AccountTypeEnum.BANK
+        (account: Account) => account.type === AccountType.BANK
       );
 
       logger.info(`Retrieved ${bankAccounts.length} bank accounts`);
