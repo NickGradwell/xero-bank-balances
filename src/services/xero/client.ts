@@ -284,6 +284,9 @@ export class XeroService {
           bankAccountCode: tx.bankAccount?.code,
         }));
         logger.info(`First 5 transaction account details: ${JSON.stringify(accountIds)}`);
+      } else if (where) {
+        // If where clause was used and we got 0 transactions, log this info
+        logger.info(`Where clause returned 0 transactions - this could mean no transactions exist for account ${accountId} or all are outside date range`);
       }
 
       // Filter transactions by account ID, name, code, and date range (client-side filtering)
@@ -434,6 +437,12 @@ export class XeroService {
         logger.info(`Where clause was used - transactions should be filtered by account ID already`);
         if (filteredTransactions.length === 0 && allTransactions.length > 0) {
           logger.warn(`No transactions match date range ${fromDateObj.toISOString()} to ${toDateObj.toISOString()} for account ${accountId}`);
+          logger.warn(`Found ${allTransactions.length} transactions for this account, but all are outside the requested date range`);
+        } else if (filteredTransactions.length === 0 && allTransactions.length === 0) {
+          logger.warn(`No transactions found for account ${accountId} (${accountName}) - this could mean:`);
+          logger.warn(`  1. The account has no transactions at all`);
+          logger.warn(`  2. All transactions are outside the date range: ${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`);
+          logger.warn(`  3. The account ID might not match between Accounts and BankTransactions endpoints`);
         }
       }
 
