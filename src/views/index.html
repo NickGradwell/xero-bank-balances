@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xero Bank Balances</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-800">
+                        <i class="fas fa-university mr-2 text-blue-600"></i>
+                        Xero Bank Balances
+                    </h1>
+                    <p class="text-gray-600 mt-1">View all connected bank account balances</p>
+                </div>
+                <div id="authSection">
+                    <!-- Will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loadingState" class="hidden bg-white rounded-lg shadow-md p-12 text-center">
+            <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
+            <p class="text-gray-600">Loading bank accounts...</p>
+        </div>
+
+        <!-- Not Authenticated State -->
+        <div id="notAuthenticatedState" class="hidden bg-white rounded-lg shadow-md p-12 text-center">
+            <i class="fas fa-lock text-6xl text-gray-400 mb-4"></i>
+            <h2 class="text-2xl font-semibold text-gray-800 mb-2">Connect to Xero</h2>
+            <p class="text-gray-600 mb-6">Please connect your Xero account to view bank account balances.</p>
+            <a href="/auth/xero" class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors">
+                <i class="fas fa-plug mr-2"></i>Connect to Xero
+            </a>
+        </div>
+
+        <!-- Error State -->
+        <div id="errorState" class="hidden bg-red-50 border border-red-200 rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center">
+                <i class="fas fa-exclamation-circle text-red-600 text-2xl mr-3"></i>
+                <div>
+                    <h3 class="text-lg font-semibold text-red-800">Error</h3>
+                    <p id="errorMessage" class="text-red-600"></p>
+                </div>
+            </div>
+            <button onclick="loadBankAccounts()" class="mt-4 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors">
+                <i class="fas fa-redo mr-1"></i>Retry
+            </button>
+        </div>
+
+        <!-- Bank Accounts Grid -->
+        <div id="accountsContainer" class="hidden">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold text-gray-800">
+                    Bank Accounts (<span id="accountsCount">0</span>)
+                </h2>
+                <button onclick="loadBankAccounts()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
+                    <i class="fas fa-sync-alt mr-1"></i>Refresh
+                </button>
+            </div>
+            <div id="accountsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Bank account cards will be inserted here -->
+            </div>
+        </div>
+
+        <!-- No Accounts State -->
+        <div id="noAccountsState" class="hidden bg-white rounded-lg shadow-md p-12 text-center">
+            <i class="fas fa-university text-6xl text-gray-400 mb-4"></i>
+            <h2 class="text-2xl font-semibold text-gray-800 mb-2">No Bank Accounts Found</h2>
+            <p class="text-gray-600">No bank accounts are currently connected to your Xero account.</p>
+        </div>
+    </div>
+
+    <script>
+        // Check authentication status on page load
+        async function checkAuthStatus() {
+            try {
+                const response = await fetch('/api/auth/status');
+                const data = await response.json();
+                return data.authenticated;
+            } catch (error) {
+                console.error('Failed to check auth status', error);
+                return false;
+            }
+        }
+
+        // Load bank accounts
+        async function loadBankAccounts() {
+            const loadingState = document.getElementById('loadingState');
+            const accountsContainer = document.getElementById('accountsContainer');
+            const noAccountsState = document.getElementById('noAccountsState');
+            const errorState = document.getElementById('errorState');
+            const errorMessage = document.getElementById('errorMessage');
+
+            // Hide all states
+            loadingState.classList.remove('hidden');
+            accountsContainer.classList.add('hidden');
+            noAccountsState.classList.add('hidden');
+            errorState.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/xero/accounts');
+                const data = await response.json();
+
+                if (response.status === 401) {
+                    // Not authenticated
+                    showNotAuthenticatedState();
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error(data.message || 'Failed to fetch bank accounts');
+                }
+
+                loadingState.classList.add('hidden');
+
+                if (data.accounts && data.accounts.length > 0) {
+                    displayBankAccounts(data.accounts);
+                    accountsContainer.classList.remove('hidden');
+                } else {
+                    noAccountsState.classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Error loading bank accounts', error);
+                loadingState.classList.add('hidden');
+                errorState.classList.remove('hidden');
+                errorMessage.textContent = error.message || 'Failed to load bank accounts. Please try again.';
+            }
+        }
+
+        // Display bank accounts
+        function displayBankAccounts(accounts) {
+            const grid = document.getElementById('accountsGrid');
+            const countElement = document.getElementById('accountsCount');
+            
+            countElement.textContent = accounts.length;
+
+            grid.innerHTML = accounts.map(account => `
+                <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center">
+                            <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-university text-blue-600"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-semibold text-gray-800">${escapeHtml(account.name)}</h3>
+                                <p class="text-sm text-gray-500">${escapeHtml(account.code)}</p>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${
+                            account.status === 'ACTIVE' 
+                                ? 'bg-green-100 text-green-800' 
+                                : 'bg-gray-100 text-gray-800'
+                        }">
+                            ${account.status}
+                        </span>
+                    </div>
+                    
+                    <div class="border-t border-gray-200 pt-4">
+                        <div class="flex items-baseline justify-between mb-2">
+                            <span class="text-sm text-gray-600">Balance</span>
+                            <span class="text-2xl font-bold ${
+                                account.balance >= 0 ? 'text-green-600' : 'text-red-600'
+                            }">
+                                ${account.balanceFormatted}
+                            </span>
+                        </div>
+                        ${account.bankAccountNumber ? `
+                            <div class="text-xs text-gray-500 mt-2">
+                                <i class="fas fa-credit-card mr-1"></i>
+                                ${escapeHtml(account.bankAccountNumber)}
+                            </div>
+                        ` : ''}
+                        <div class="text-xs text-gray-500 mt-2">
+                            <i class="fas fa-coins mr-1"></i>
+                            ${escapeHtml(account.currencyCode)}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Show not authenticated state
+        function showNotAuthenticatedState() {
+            document.getElementById('loadingState').classList.add('hidden');
+            document.getElementById('accountsContainer').classList.add('hidden');
+            document.getElementById('noAccountsState').classList.add('hidden');
+            document.getElementById('errorState').classList.add('hidden');
+            document.getElementById('notAuthenticatedState').classList.remove('hidden');
+        }
+
+        // Update auth section in header
+        async function updateAuthSection() {
+            const authSection = document.getElementById('authSection');
+            const isAuthenticated = await checkAuthStatus();
+
+            if (isAuthenticated) {
+                authSection.innerHTML = `
+                    <button onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-sign-out-alt mr-1"></i>Logout
+                    </button>
+                `;
+            } else {
+                authSection.innerHTML = `
+                    <a href="/auth/xero" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-plug mr-1"></i>Connect to Xero
+                    </a>
+                `;
+            }
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Logout function
+        async function logout() {
+            try {
+                const response = await fetch('/auth/logout', {
+                    method: 'POST',
+                });
+                if (response.ok || response.redirected) {
+                    window.location.reload();
+                }
+            } catch (error) {
+                console.error('Logout failed', error);
+                window.location.reload();
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            await updateAuthSection();
+            const isAuthenticated = await checkAuthStatus();
+            
+            if (isAuthenticated) {
+                await loadBankAccounts();
+            } else {
+                showNotAuthenticatedState();
+            }
+        });
+    </script>
+</body>
+</html>
+
