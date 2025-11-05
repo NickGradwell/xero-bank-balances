@@ -196,16 +196,14 @@ export class XeroService {
 
       // Try using where clause to filter by account - Xero API supports filtering
       // According to Xero docs, we can filter by BankAccount.AccountID using Guid syntax
-      // But we'll fetch all and filter client-side as fallback since where clause syntax can be tricky
+      // Format: BankAccount.AccountID=Guid("account-id")
       let where: string | undefined = undefined;
       
-      // Try where clause if we have account ID - but keep it simple for now
-      // Format: BankAccount.AccountID=Guid("account-id")
-      // Note: This may not work, so we'll also filter client-side
+      // Enable where clause to filter by account ID - this should return only transactions for this account
+      // This is crucial because otherwise the API returns transactions from ALL accounts (limited to ~45)
       if (accountId) {
-        // where = `BankAccount.AccountID=Guid("${accountId}")`;
-        // Disabled for now - will filter client-side instead
-        where = undefined;
+        where = `BankAccount.AccountID=Guid("${accountId}")`;
+        logger.info(`Using where clause to filter by account ID: ${where}`);
       }
       
       // Convert date strings to Date objects for client-side filtering
@@ -286,21 +284,6 @@ export class XeroService {
           bankAccountCode: tx.bankAccount?.code,
         }));
         logger.info(`First 5 transaction account details: ${JSON.stringify(accountIds)}`);
-        
-        // Log all unique account IDs, names, and codes
-        const uniqueAccountIds = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-          tx.bankAccount?.accountID
-        ).filter(Boolean)));
-        const uniqueAccountNames = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-          tx.bankAccount?.name
-        ).filter(Boolean)));
-        const uniqueAccountCodes = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-          tx.bankAccount?.code
-        ).filter(Boolean)));
-        logger.info(`Unique account IDs in transactions (${uniqueAccountIds.length}): ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
-        logger.info(`Unique account names in transactions (${uniqueAccountNames.length}): ${JSON.stringify(uniqueAccountNames.slice(0, 10))}`);
-        logger.info(`Unique account codes in transactions (${uniqueAccountCodes.length}): ${JSON.stringify(uniqueAccountCodes.slice(0, 10))}`);
-        logger.info(`Requested account ID: ${accountId}, Name: ${accountName}`);
       }
 
       // Filter transactions by account ID, name, code, and date range (client-side filtering)
@@ -402,35 +385,57 @@ export class XeroService {
 
       logger.info(`Retrieved ${filteredTransactions.length} transactions for account ${accountId} (${accountName}) (from ${allTransactions.length} total)`);
       
-      // Log detailed filtering results
-      const uniqueAccountIds = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-        tx.bankAccount?.accountID
-      ).filter(Boolean)));
-      const uniqueAccountNames = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-        tx.bankAccount?.name
-      ).filter(Boolean)));
-      const uniqueAccountCodes = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
-        tx.bankAccount?.code
-      ).filter(Boolean)));
-      logger.info(`Date range: ${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`);
-      logger.info(`Account IDs found in transactions: ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
-      logger.info(`Account names found in transactions: ${JSON.stringify(uniqueAccountNames.slice(0, 10))}`);
-      logger.info(`Account codes found in transactions: ${JSON.stringify(uniqueAccountCodes.slice(0, 10))}`);
-      logger.info(`Requested account ID: ${accountId}, Name: ${accountName}, Code: ${accountCode}`);
-      
-      // Check for partial name matches
-      const nameMatches = uniqueAccountNames.filter(name => {
-        if (!name || !accountName) return false;
-        const normalizedName = name.toLowerCase().trim();
-        const normalizedAccountName = accountName.toLowerCase().trim();
-        return normalizedName.includes(normalizedAccountName) || 
-               normalizedAccountName.includes(normalizedName);
-      });
-      const codeMatches = uniqueAccountCodes.filter(code => {
-        if (!code || !accountCode) return false;
-        return code.toLowerCase().trim() === accountCode.toLowerCase().trim();
-      });
-      logger.info(`Match found by ID: ${uniqueAccountIds.includes(accountId)}, by Name (exact): ${uniqueAccountNames.includes(accountName)}, by Name (partial): ${nameMatches.length > 0} (${JSON.stringify(nameMatches)}), by Code: ${codeMatches.length > 0}`);
+      // Log detailed filtering results only if we filtered client-side
+      // If we used a where clause, we should only get transactions for this account
+      if (!where) {
+        const uniqueAccountIds = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.accountID
+        ).filter(Boolean)));
+        const uniqueAccountNames = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.name
+        ).filter(Boolean)));
+        const uniqueAccountCodes = Array.from(new Set(allTransactions.map((tx: XeroBankTransaction) => 
+          tx.bankAccount?.code
+        ).filter(Boolean)));
+        logger.info(`Date range: ${fromDateObj.toISOString()} to ${toDateObj.toISOString()}`);
+        logger.info(`Account IDs found in transactions: ${JSON.stringify(uniqueAccountIds.slice(0, 10))}`);
+        logger.info(`Account names found in transactions: ${JSON.stringify(uniqueAccountNames.slice(0, 10))}`);
+        logger.info(`Account codes found in transactions: ${JSON.stringify(uniqueAccountCodes.filter(c => c && c.trim()).slice(0, 10))}`);
+        logger.info(`Requested account ID: ${accountId}, Name: ${accountName}, Code: ${accountCode}`);
+        
+        // Log ALL account names found - this will help us see if "The Forest" appears with a different name
+        logger.info(`All account names in transactions (${uniqueAccountNames.length} total): ${JSON.stringify(uniqueAccountNames)}`);
+        
+        // Check for partial name matches including "forest" in any form
+        const forestMatches = uniqueAccountNames.filter(name => {
+          if (!name) return false;
+          const normalizedName = name.toLowerCase().trim();
+          return normalizedName.includes('forest');
+        });
+        if (forestMatches.length > 0) {
+          logger.info(`Found account names containing 'forest': ${JSON.stringify(forestMatches)}`);
+        }
+        
+        // Check for partial name matches
+        const nameMatches = uniqueAccountNames.filter(name => {
+          if (!name || !accountName) return false;
+          const normalizedName = name.toLowerCase().trim();
+          const normalizedAccountName = accountName.toLowerCase().trim();
+          return normalizedName.includes(normalizedAccountName) || 
+                 normalizedAccountName.includes(normalizedName);
+        });
+        const codeMatches = uniqueAccountCodes.filter(code => {
+          if (!code || !accountCode) return false;
+          return code.toLowerCase().trim() === accountCode.toLowerCase().trim();
+        });
+        logger.info(`Match found by ID: ${uniqueAccountIds.includes(accountId)}, by Name (exact): ${uniqueAccountNames.includes(accountName)}, by Name (partial): ${nameMatches.length > 0} (${JSON.stringify(nameMatches)}), by Code: ${codeMatches.length > 0}`);
+      } else {
+        // If we used where clause, log simpler summary
+        logger.info(`Where clause was used - transactions should be filtered by account ID already`);
+        if (filteredTransactions.length === 0 && allTransactions.length > 0) {
+          logger.warn(`No transactions match date range ${fromDateObj.toISOString()} to ${toDateObj.toISOString()} for account ${accountId}`);
+        }
+      }
 
       // Transform to our BankTransaction format
       return filteredTransactions.map((tx: XeroBankTransaction) => {
@@ -491,6 +496,8 @@ export class XeroService {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
         accountId,
+        accountName,
+        accountCode,
         fromDate,
         toDate,
       };
@@ -502,6 +509,11 @@ export class XeroService {
           statusText: (error as any).response?.statusText,
           data: (error as any).response?.data,
         };
+      }
+      
+      // If where clause failed, log a warning and suggest fallback
+      if (errorDetails.message.includes('QueryParseException') || errorDetails.message.includes('where') || (errorDetails.response?.status === 400)) {
+        logger.warn('Where clause may have failed - this could mean the account has no transactions or the syntax needs adjustment', errorDetails);
       }
       
       logger.error('Failed to fetch bank transactions', errorDetails);
