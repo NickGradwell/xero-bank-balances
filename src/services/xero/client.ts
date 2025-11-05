@@ -36,24 +36,78 @@ export class XeroService {
       }
 
       // Get all accounts
-      const response = await this.client.accountingApi.getAccounts(tenantId);
-      const accounts = response.body.accounts || [];
+      const accountsResponse = await this.client.accountingApi.getAccounts(tenantId);
+      const accounts = accountsResponse.body.accounts || [];
 
       // Filter for bank accounts only - AccountType enum comparison
       const bankAccounts = accounts.filter(
         (account: Account) => account.type === AccountType.BANK
       );
 
-      logger.info(`Retrieved ${bankAccounts.length} bank accounts`);
+      logger.info(`Retrieved ${bankAccounts.length} bank accounts from Accounts endpoint`);
 
-      // Transform to our BankAccount format
+      // Fetch BankSummary report to get balances
+      let balancesMap: Map<string, number> = new Map();
+      try {
+        const reportResponse = await this.client.accountingApi.getReportBankSummary(tenantId);
+        const report = reportResponse.body.reports?.[0];
+        
+        if (report && report.rows) {
+          // BankSummary report structure: rows contain sections, each section has rows with account data
+          // Recursively process rows to find account balances
+          const processRows = (rows: any[]): void => {
+            rows.forEach((row: any) => {
+              // Check if this row has cells (account data)
+              if (row.cells && row.cells.length >= 2) {
+                const cells = row.cells;
+                // Try to match account by name or code (first cell usually has account name)
+                const accountIdentifier = cells[0]?.value;
+                // Balance is typically in the last cell
+                const balanceValue = cells[cells.length - 1]?.value;
+                
+                if (accountIdentifier && balanceValue !== undefined && balanceValue !== null) {
+                  // Try to find matching account by name or code
+                  const matchingAccount = bankAccounts.find(
+                    (acc: Account) => 
+                      acc.name === accountIdentifier || 
+                      acc.code === accountIdentifier ||
+                      acc.accountID === accountIdentifier
+                  );
+                  
+                  if (matchingAccount) {
+                    // Parse balance - handle string values like "31,144.91" or numeric values
+                    const balanceStr = String(balanceValue).replace(/,/g, '');
+                    const balance = parseFloat(balanceStr);
+                    if (!isNaN(balance)) {
+                      balancesMap.set(matchingAccount.accountID || '', balance);
+                      logger.debug(`Found balance for account ${matchingAccount.name}: ${balance}`);
+                    }
+                  }
+                }
+              }
+              
+              // Recursively process nested rows
+              if (row.rows && Array.isArray(row.rows)) {
+                processRows(row.rows);
+              }
+            });
+          };
+          
+          processRows(report.rows);
+        }
+        
+        logger.info(`Retrieved balances for ${balancesMap.size} bank accounts from BankSummary report`);
+      } catch (reportError) {
+        logger.warn('Failed to fetch BankSummary report, balances will default to 0', { 
+          error: reportError instanceof Error ? reportError.message : String(reportError),
+          stack: reportError instanceof Error ? reportError.stack : undefined
+        });
+      }
+
+      // Transform to our BankAccount format, merging with balances
       return bankAccounts.map((account: Account) => {
-        // Account balance might not be directly available on Account object
-        // Try to get it, but default to 0 if not available
-        // Note: Balance might need to be fetched from BankSummary report instead
-        const balance = (account as any).balance !== undefined && (account as any).balance !== null 
-          ? Number((account as any).balance) 
-          : 0;
+        // Get balance from report, default to 0 if not found
+        const balance = balancesMap.get(account.accountID || '') ?? 0;
         const currencyCode = account.currencyCode ? String(account.currencyCode) : 'USD';
         const formattedBalance = new Intl.NumberFormat('en-US', {
           style: 'currency',
