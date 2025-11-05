@@ -41,31 +41,32 @@ export class XeroService {
 
       // Filter for bank accounts only
       const bankAccounts = accounts.filter(
-        (account: XeroAccount) => account.Type === 'BANK'
+        (account) => account.type === 'BANK'
       );
 
       logger.info(`Retrieved ${bankAccounts.length} bank accounts`);
 
       // Transform to our BankAccount format
-      return bankAccounts.map((account: XeroAccount) => {
-        const balance = account.Balance || 0;
+      return bankAccounts.map((account) => {
+        const balance = (account.balance || 0);
+        const currencyCode = account.currencyCode || 'USD';
         const formattedBalance = new Intl.NumberFormat('en-US', {
           style: 'currency',
-          currency: account.CurrencyCode || 'USD',
+          currency: currencyCode,
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         }).format(balance);
 
         return {
-          accountId: account.AccountID,
-          code: account.Code,
-          name: account.Name,
-          bankAccountNumber: account.BankAccountNumber,
-          status: account.Status,
-          currencyCode: account.CurrencyCode,
+          accountId: account.accountID || '',
+          code: account.code || '',
+          name: account.name || '',
+          bankAccountNumber: account.bankAccountNumber,
+          status: account.status || 'ACTIVE',
+          currencyCode: currencyCode,
           balance: balance,
           balanceFormatted: formattedBalance,
-          updatedDateUTC: account.UpdatedDateUTC,
+          updatedDateUTC: account.updatedDateUTC,
         };
       });
     } catch (error) {

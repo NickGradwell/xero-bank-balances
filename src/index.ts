@@ -74,16 +74,18 @@ app.get('/auth/xero', async (req, res) => {
 });
 
 // OAuth 2.0 - Handle callback
-app.get('/auth/xero/callback', async (req, res) => {
+app.get('/auth/xero/callback', async (req, res): Promise<void> => {
   try {
     const { code, state } = req.query;
 
     if (!code || typeof code !== 'string') {
-      return res.status(400).send('Authorization code missing');
+      res.status(400).send('Authorization code missing');
+      return;
     }
 
     if (!state || state !== req.session.oauthState) {
-      return res.status(400).send('Invalid state parameter');
+      res.status(400).send('Invalid state parameter');
+      return;
     }
 
     // Exchange code for token
@@ -106,34 +108,37 @@ app.get('/auth/xero/callback', async (req, res) => {
 });
 
 // Logout endpoint
-app.post('/auth/logout', (req, res) => {
+app.post('/auth/logout', (req, res): void => {
   req.session.destroy((err) => {
     if (err) {
       logger.error('Failed to destroy session', { error: err });
-      return res.status(500).json({ error: 'Failed to logout' });
+      res.status(500).json({ error: 'Failed to logout' });
+      return;
     }
     res.redirect('/');
   });
 });
 
 // API endpoint to get bank accounts
-app.get('/api/xero/accounts', async (req, res) => {
+app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   try {
     const tokenSet = req.session.xeroTokenSet;
 
     if (!tokenSet) {
-      return res.status(401).json({
+      res.status(401).json({
         error: 'Not authenticated',
         requiresAuth: true,
       });
+      return;
     }
 
     const xeroService = new XeroService(tokenSet);
     const bankAccounts = await xeroService.getBankAccounts(tokenSet);
 
     // Update session with potentially refreshed token
-    if (tokenSet !== req.session.xeroTokenSet) {
-      req.session.xeroTokenSet = tokenSet;
+    const updatedTokenSet = req.session.xeroTokenSet;
+    if (updatedTokenSet && updatedTokenSet !== tokenSet) {
+      req.session.xeroTokenSet = updatedTokenSet;
     }
 
     res.json({

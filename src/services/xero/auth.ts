@@ -61,15 +61,22 @@ export async function exchangeCodeForToken(
 export async function refreshAccessToken(refreshToken: string): Promise<XeroTokenSet> {
   try {
     const client = getXeroClient();
-    await client.refreshToken(refreshToken);
+    // Set the refresh token first
+    client.setTokenSet({
+      refresh_token: refreshToken,
+    } as any);
+    
+    // Refresh the token
+    await client.refreshWithRefreshToken();
     await client.updateTenants();
     
-    const tokenSet = client.tokenSet;
+    // Get the updated token set
+    const tokenSet = (client as any).tokenSet;
     if (!tokenSet) {
       throw new Error('Token refresh failed - no token set returned');
     }
 
-    const tenantId = client.tenants?.[0]?.tenantId || tokenSet.tenantId || '';
+    const tenantId = client.tenants?.[0]?.tenantId || (tokenSet.tenantId || '');
 
     logger.info('Successfully refreshed access token');
 
