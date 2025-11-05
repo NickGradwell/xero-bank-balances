@@ -77,7 +77,11 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
     logger.info('OAuth callback received', {
       hasCode: !!code,
       hasState: !!state,
+      stateType: typeof state,
+      stateValue: state,
       sessionState: req.session.oauthState,
+      sessionStateType: typeof req.session.oauthState,
+      sessionExists: !!req.session,
     });
 
     if (!code || typeof code !== 'string') {
@@ -86,10 +90,17 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
       return;
     }
 
-    if (!state || state !== req.session.oauthState) {
+    // Ensure state is a string and compare
+    const receivedState = typeof state === 'string' ? state : String(state);
+    const expectedState = req.session.oauthState;
+
+    if (!receivedState || !expectedState || receivedState !== expectedState) {
       logger.error('Invalid state parameter', {
-        receivedState: state,
-        expectedState: req.session.oauthState,
+        receivedState: receivedState,
+        receivedStateLength: receivedState?.length,
+        expectedState: expectedState,
+        expectedStateLength: expectedState?.length,
+        match: receivedState === expectedState,
       });
       res.status(400).send('Invalid state parameter');
       return;
