@@ -49,14 +49,15 @@ export async function exchangeCodeForToken(
       redirectUri: config.xero.redirectUri,
     });
     
-    // apiCallback expects the full callback URL with query parameters
+    // apiCallback expects the full callback URL with query parameters and state for validation
     // Construct the full URL that Xero redirected to
     const callbackUrl = `${config.xero.redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
     
     logger.info('Calling apiCallback', { callbackUrl: callbackUrl.substring(0, 100) + '...' });
     
-    // apiCallback only takes the callback URL (state validation is handled separately)
-    const tokenSet = await client.apiCallback(callbackUrl);
+    // apiCallback needs state in options object for openid-client validation
+    // TypeScript types may not reflect this, so we cast to any
+    const tokenSet = await (client.apiCallback as any)(callbackUrl, { state });
     
     logger.info('apiCallback completed', { hasTokenSet: !!tokenSet });
     
