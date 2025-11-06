@@ -347,6 +347,9 @@
     </div>
 
     <script>
+        // Cached bank accounts for reuse in filters
+        let cachedAccounts = [];
+
         // Check authentication status on page load
         async function checkAuthStatus() {
             try {
@@ -409,6 +412,7 @@
             const countElement = document.getElementById('accountsCount');
             
             countElement.textContent = accounts.length;
+            cachedAccounts = accounts;
 
             grid.innerHTML = accounts.map(account => `
                 <div onclick="showTransactions('${escapeHtml(account.accountId)}', '${escapeHtml(account.name)}', '${escapeHtml(account.code)}')" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow cursor-pointer">
@@ -814,90 +818,88 @@
 
         // October 2025 Transactions modal logic
         let october2025Transactions = [];
-        let october2025Accounts = [];
         let october2025CurrentPage = 1;
         const october2025PageSize = 100;
-
         let october2025Loading = false;
+        let october2025AbortController = null;
 
         async function showOctober2025Transactions() {
-            // Prevent multiple concurrent requests
-            if (october2025Loading) {
-                return;
-            }
-
             const modal = document.getElementById('october2025Modal');
             const loading = document.getElementById('october2025Loading');
             const container = document.getElementById('october2025Container');
             const error = document.getElementById('october2025Error');
             const table = document.getElementById('october2025Table');
             const accountFilters = document.getElementById('october2025AccountFilters');
+            const filterCount = document.getElementById('october2025FilterCount');
+            const transactionCount = document.getElementById('october2025TransactionCount');
+            const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
+            const currentPageEl = document.getElementById('october2025CurrentPage');
+            const totalPagesEl = document.getElementById('october2025TotalPages');
+            const showingFromEl = document.getElementById('october2025ShowingFrom');
+            const showingToEl = document.getElementById('october2025ShowingTo');
 
             modal.classList.remove('hidden');
-            loading.classList.remove('hidden');
-            container.classList.add('hidden');
             error.classList.add('hidden');
-            table.innerHTML = '';
-            accountFilters.innerHTML = '';
 
-            october2025Loading = true;
-
-            try {
-                const response = await fetch('/api/xero/transactions/october-2025');
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Failed to fetch October 2025 transactions');
-
-                october2025Transactions = data.transactions || [];
-                
-                // Extract unique accounts from transactions
-                const accountMap = new Map();
-                october2025Transactions.forEach(tx => {
-                    const key = tx.bankAccountId || tx.bankAccountName || tx.bankAccountCode || '';
-                    if (key && !accountMap.has(key)) {
-                        accountMap.set(key, {
-                            id: tx.bankAccountId || '',
-                            name: tx.bankAccountName || '',
-                            code: tx.bankAccountCode || '',
-                        });
+            // Ensure we have cached accounts for filters
+            if (cachedAccounts.length === 0) {
+                try {
+                    const accountsResponse = await fetch('/api/xero/accounts');
+                    const accountsData = await accountsResponse.json();
+                    if (accountsResponse.ok && Array.isArray(accountsData.accounts)) {
+                        cachedAccounts = accountsData.accounts;
                     }
-                });
-                october2025Accounts = Array.from(accountMap.values()).sort((a, b) => {
-                    // Sort by code if available, otherwise by name
-                    const aSort = a.code || a.name || '';
-                    const bSort = b.code || b.name || '';
-                    return aSort.localeCompare(bSort);
-                });
+                } catch (accountsError) {
+                    console.warn('Failed to refresh accounts for October 2025 modal', accountsError);
+                }
+            }
 
-                // Build account filter checkboxes
-                accountFilters.innerHTML = october2025Accounts.map(account => {
-                    const accountKey = account.id || account.name || account.code || '';
-                    const displayName = account.name || account.code || account.id || 'Unknown';
+            // Build account filter checkboxes
+            accountFilters.innerHTML = cachedAccounts
+                .map((account) => {
+                    const displayName = account.name || account.code || account.accountId || 'Unknown';
                     const displayCode = account.code ? ` (${account.code})` : '';
                     return `
                         <label class="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
-                            <input type="checkbox" 
-                                   class="october2025AccountCheckbox rounded border-gray-300 text-blue-600 focus:ring-blue-500" 
-                                   value="${escapeHtml(accountKey)}"
-                                   data-account-id="${escapeHtml(account.id || '')}"
+                            <input type="checkbox"
+                                   class="october2025AccountCheckbox rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                   data-account-id="${escapeHtml(account.accountId || '')}"
                                    data-account-name="${escapeHtml(account.name || '')}"
                                    data-account-code="${escapeHtml(account.code || '')}"
-                                   onchange="filterOctober2025Transactions()">
+                                   onchange="onOctober2025FiltersChanged()">
                             <span class="text-sm text-gray-700">${escapeHtml(displayName)}${escapeHtml(displayCode)}</span>
                         </label>
                     `;
-                }).join('');
+                })
+                .join('');
 
-                // Display all transactions initially
-                filterOctober2025Transactions();
+            // Reset state
+            october2025Transactions = [];
+            october2025CurrentPage = 1;
+            if (october2025AbortController) {
+                october2025AbortController.abort();
+                october2025AbortController = null;
+            }
+            october2025Loading = false;
 
-                loading.classList.add('hidden');
-                container.classList.remove('hidden');
-            } catch (err) {
-                loading.classList.add('hidden');
-                error.classList.remove('hidden');
-                error.textContent = err.message || 'Failed to load October 2025 transactions';
-            } finally {
-                october2025Loading = false;
+            // Reset UI state
+            if (filterCount) filterCount.textContent = '0 accounts selected';
+            if (transactionCount) transactionCount.textContent = '0 transactions';
+            if (totalTransactionsEl) totalTransactionsEl.textContent = '0';
+            if (currentPageEl) currentPageEl.textContent = '1';
+            if (totalPagesEl) totalPagesEl.textContent = '1';
+            if (showingFromEl) showingFromEl.textContent = '0';
+            if (showingToEl) showingToEl.textContent = '0';
+
+            // Show instructions
+            loading.classList.add('hidden');
+            container.classList.remove('hidden');
+            const prevBtn = document.getElementById('october2025PrevBtn');
+            const nextBtn = document.getElementById('october2025NextBtn');
+            if (prevBtn) prevBtn.disabled = true;
+            if (nextBtn) nextBtn.disabled = true;
+            if (table) {
+                table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">Select at least one account to load October 2025 transactions.</td></tr>';
             }
         }
 
@@ -905,75 +907,152 @@
             const modal = document.getElementById('october2025Modal');
             modal.classList.add('hidden');
             october2025Transactions = [];
-            october2025Accounts = [];
             october2025CurrentPage = 1;
+            if (october2025AbortController) {
+                october2025AbortController.abort();
+                october2025AbortController = null;
+            }
+            october2025Loading = false;
         }
 
         function selectPropertiesOnly() {
             const checkboxes = document.querySelectorAll('.october2025AccountCheckbox');
-            checkboxes.forEach(checkbox => {
+            checkboxes.forEach((checkbox) => {
                 const accountCode = checkbox.getAttribute('data-account-code') || '';
                 // Properties Only = accounts that DON'T start with 3 digits
-                const isProperty = accountCode && !/^\d{3}/.test(accountCode);
+                const isProperty = accountCode ? !/^\d{3}/.test(accountCode) : true;
                 checkbox.checked = isProperty;
             });
-            filterOctober2025Transactions();
+            onOctober2025FiltersChanged();
         }
 
         function clearAccountFilters() {
             const checkboxes = document.querySelectorAll('.october2025AccountCheckbox');
-            checkboxes.forEach(checkbox => {
+            checkboxes.forEach((checkbox) => {
                 checkbox.checked = false;
             });
-            filterOctober2025Transactions();
+            onOctober2025FiltersChanged();
         }
 
-        function filterOctober2025Transactions() {
-            // Reset to page 1 when filtering changes
+        async function onOctober2025FiltersChanged() {
+            const loading = document.getElementById('october2025Loading');
+            const container = document.getElementById('october2025Container');
+            const error = document.getElementById('october2025Error');
+            const table = document.getElementById('october2025Table');
+            const filterCount = document.getElementById('october2025FilterCount');
+            const transactionCount = document.getElementById('october2025TransactionCount');
+            const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
+
+            const checkboxes = Array.from(document.querySelectorAll('.october2025AccountCheckbox'));
+            const selectedCheckboxes = checkboxes.filter((checkbox) => checkbox.checked);
+
+            if (filterCount) {
+                filterCount.textContent = `${selectedCheckboxes.length} account${selectedCheckboxes.length !== 1 ? 's' : ''} selected`;
+            }
+
+            // Abort any ongoing request
+            if (october2025AbortController) {
+                october2025AbortController.abort();
+                october2025AbortController = null;
+            }
+
+            if (selectedCheckboxes.length === 0) {
+                october2025Transactions = [];
+                october2025CurrentPage = 1;
+                if (transactionCount) transactionCount.textContent = '0 transactions';
+                if (totalTransactionsEl) totalTransactionsEl.textContent = '0';
+                const currentPageEl = document.getElementById('october2025CurrentPage');
+                const totalPagesEl = document.getElementById('october2025TotalPages');
+                const showingFromEl = document.getElementById('october2025ShowingFrom');
+                const showingToEl = document.getElementById('october2025ShowingTo');
+                if (currentPageEl) currentPageEl.textContent = '1';
+                if (totalPagesEl) totalPagesEl.textContent = '1';
+                if (showingFromEl) showingFromEl.textContent = '0';
+                if (showingToEl) showingToEl.textContent = '0';
+                const prevBtn = document.getElementById('october2025PrevBtn');
+                const nextBtn = document.getElementById('october2025NextBtn');
+                if (prevBtn) prevBtn.disabled = true;
+                if (nextBtn) nextBtn.disabled = true;
+                if (table) {
+                    table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">Select at least one account to load October 2025 transactions.</td></tr>';
+                }
+                return;
+            }
+
+            const accountIds = new Set();
+            const accountCodes = new Set();
+            const accountNames = new Set();
+
+            selectedCheckboxes.forEach((checkbox) => {
+                const accountId = checkbox.getAttribute('data-account-id') || '';
+                const accountCode = checkbox.getAttribute('data-account-code') || '';
+                const accountName = checkbox.getAttribute('data-account-name') || '';
+
+                if (accountId) accountIds.add(accountId);
+                if (accountCode) accountCodes.add(accountCode);
+                if (accountName) accountNames.add(accountName);
+            });
+
+            const params = new URLSearchParams();
+            accountIds.forEach((id) => params.append('accountIds', id));
+            accountCodes.forEach((code) => params.append('accountCodes', code));
+            accountNames.forEach((name) => params.append('accountNames', name));
+
+            loading.classList.remove('hidden');
+            container.classList.add('hidden');
+            error.classList.add('hidden');
             october2025CurrentPage = 1;
-            displayOctober2025Page();
+
+            const controller = new AbortController();
+            october2025AbortController = controller;
+            october2025Loading = true;
+
+            try {
+                const response = await fetch(`/api/xero/transactions/october-2025?${params.toString()}`, {
+                    signal: controller.signal,
+                });
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to fetch October 2025 transactions');
+                }
+
+                october2025Transactions = Array.isArray(data.transactions) ? data.transactions : [];
+
+                if (transactionCount) {
+                    transactionCount.textContent = `${october2025Transactions.length} transaction${october2025Transactions.length !== 1 ? 's' : ''}`;
+                }
+                if (totalTransactionsEl) {
+                    totalTransactionsEl.textContent = `${october2025Transactions.length}`;
+                }
+
+                loading.classList.add('hidden');
+                container.classList.remove('hidden');
+                displayOctober2025Page();
+            } catch (fetchError) {
+                if (fetchError.name === 'AbortError') {
+                    return;
+                }
+                loading.classList.add('hidden');
+                error.classList.remove('hidden');
+                error.textContent = fetchError.message || 'Failed to load October 2025 transactions';
+            } finally {
+                if (october2025AbortController === controller) {
+                    october2025AbortController = null;
+                }
+                october2025Loading = false;
+            }
         }
 
         function getFilteredTransactions() {
-            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox:checked');
-            const selectedAccountIds = new Set();
-            const selectedAccountNames = new Set();
-            const selectedAccountCodes = new Set();
-
-            checkboxes.forEach(checkbox => {
-                const accountId = checkbox.getAttribute('data-account-id') || '';
-                const accountName = (checkbox.getAttribute('data-account-name') || '').toLowerCase().trim();
-                const accountCode = checkbox.getAttribute('data-account-code') || '';
-                
-                if (accountId) selectedAccountIds.add(accountId);
-                if (accountName) selectedAccountNames.add(accountName);
-                if (accountCode) selectedAccountCodes.add(accountCode);
-            });
-
-            // Filter transactions
-            let filteredTransactions = october2025Transactions;
-            
-            if (selectedAccountIds.size > 0 || selectedAccountNames.size > 0 || selectedAccountCodes.size > 0) {
-                filteredTransactions = october2025Transactions.filter(tx => {
-                    const txAccountId = tx.bankAccountId || '';
-                    const txAccountName = (tx.bankAccountName || '').toLowerCase().trim();
-                    const txAccountCode = tx.bankAccountCode || '';
-                    
-                    return selectedAccountIds.has(txAccountId) ||
-                           selectedAccountNames.has(txAccountName) ||
-                           selectedAccountCodes.has(txAccountCode);
-                });
-            }
-
-            return filteredTransactions;
+            return october2025Transactions;
         }
 
         function displayOctober2025Page() {
             const filteredTransactions = getFilteredTransactions();
             const totalTransactions = filteredTransactions.length;
             const totalPages = Math.max(1, Math.ceil(totalTransactions / october2025PageSize));
-            
-            // Ensure current page is valid
+
             if (october2025CurrentPage > totalPages) {
                 october2025CurrentPage = totalPages;
             }
@@ -981,38 +1060,33 @@
                 october2025CurrentPage = 1;
             }
 
-            // Get transactions for current page
             const startIndex = (october2025CurrentPage - 1) * october2025PageSize;
             const endIndex = startIndex + october2025PageSize;
             const pageTransactions = filteredTransactions.slice(startIndex, endIndex);
 
-            // Update filter count
             const checkboxes = document.querySelectorAll('.october2025AccountCheckbox:checked');
             const filterCount = document.getElementById('october2025FilterCount');
             if (filterCount) {
                 filterCount.textContent = `${checkboxes.length} account${checkboxes.length !== 1 ? 's' : ''} selected`;
             }
 
-            // Update transaction count (total filtered)
             const transactionCount = document.getElementById('october2025TransactionCount');
             if (transactionCount) {
                 transactionCount.textContent = `${totalTransactions} transaction${totalTransactions !== 1 ? 's' : ''}`;
             }
 
-            // Update pagination info
             const currentPageEl = document.getElementById('october2025CurrentPage');
             const totalPagesEl = document.getElementById('october2025TotalPages');
             const showingFromEl = document.getElementById('october2025ShowingFrom');
             const showingToEl = document.getElementById('october2025ShowingTo');
             const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
-            
-            if (currentPageEl) currentPageEl.textContent = october2025CurrentPage;
+
+            if (currentPageEl) currentPageEl.textContent = totalPages === 0 ? '1' : october2025CurrentPage;
             if (totalPagesEl) totalPagesEl.textContent = totalPages;
             if (showingFromEl) showingFromEl.textContent = totalTransactions > 0 ? startIndex + 1 : 0;
             if (showingToEl) showingToEl.textContent = Math.min(endIndex, totalTransactions);
             if (totalTransactionsEl) totalTransactionsEl.textContent = totalTransactions;
 
-            // Update pagination buttons
             const prevBtn = document.getElementById('october2025PrevBtn');
             const nextBtn = document.getElementById('october2025NextBtn');
             if (prevBtn) {
@@ -1022,11 +1096,12 @@
                 nextBtn.disabled = october2025CurrentPage >= totalPages;
             }
 
-            // Display transactions for current page
             const table = document.getElementById('october2025Table');
             if (table) {
                 if (pageTransactions.length > 0) {
-                    const rows = pageTransactions.map(tx => `
+                    const rows = pageTransactions
+                        .map(
+                            (tx) => `
                         <tr class="hover:bg-gray-50">
                             <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
                             <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.journalNumber?.toString() || '')}</td>
@@ -1037,7 +1112,9 @@
                             <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
                             <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
                         </tr>
-                    `).join('');
+                    `
+                        )
+                        .join('');
                     table.innerHTML = rows;
                 } else {
                     table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">No transactions match the selected filters</td></tr>';
@@ -1048,7 +1125,7 @@
         function changeOctober2025Page(delta) {
             const filteredTransactions = getFilteredTransactions();
             const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / october2025PageSize));
-            
+
             const newPage = october2025CurrentPage + delta;
             if (newPage >= 1 && newPage <= totalPages) {
                 october2025CurrentPage = newPage;

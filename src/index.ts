@@ -419,7 +419,42 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
     await setTokenSet(validTokenSet);
 
     const client = getXeroClient();
-    
+
+    // Parse account filters from query parameters
+    const parseQueryArray = (value: unknown): string[] => {
+      if (!value) {
+        return [];
+      }
+      const values = Array.isArray(value) ? value : [value];
+      return values
+        .flatMap((item) => String(item).split(','))
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    };
+
+    const accountIds = parseQueryArray(req.query.accountIds);
+    const accountCodes = parseQueryArray(req.query.accountCodes);
+    const accountNames = parseQueryArray(req.query.accountNames);
+
+    if (accountIds.length === 0 && accountCodes.length === 0 && accountNames.length === 0) {
+      res.status(400).json({ error: 'At least one account must be selected' });
+      return;
+    }
+
+    const accountIdSet = new Set(accountIds);
+    const accountCodeSet = new Set(accountCodes.map((code) => code.toLowerCase()));
+    const accountNameSet = new Set(accountNames.map((name) => name.toLowerCase()));
+    const accountNameArray = Array.from(accountNameSet);
+
+    logger.info('(OCTOBER 2025) Fetching journals for selected accounts', {
+      accountIdsCount: accountIds.length,
+      accountCodesCount: accountCodes.length,
+      accountNamesCount: accountNames.length,
+      accountIds,
+      accountCodes,
+      accountNames,
+    });
+
     // Fetch ALL journals for October 2025 (no limit)
     // Use a Map to deduplicate transactions by unique key
     const transactionsMap = new Map<string, any>();
@@ -462,6 +497,37 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
           // Each journal line represents a transaction entry
           // Use line index to create unique key for each line in a journal
           journal.journalLines.forEach((line, lineIndex) => {
+            const lineAccountId = line.accountID || '';
+            const lineAccountCodeRaw = line.accountCode || '';
+            const lineAccountCode = lineAccountCodeRaw.toLowerCase();
+            const lineAccountNameRaw = line.accountName || '';
+            const lineAccountName = lineAccountNameRaw.toLowerCase().trim();
+
+            let matchesAccount = false;
+
+            if (lineAccountId && accountIdSet.has(lineAccountId)) {
+              matchesAccount = true;
+            }
+
+            if (!matchesAccount && lineAccountCode && accountCodeSet.has(lineAccountCode)) {
+              matchesAccount = true;
+            }
+
+            if (!matchesAccount && lineAccountName) {
+              if (accountNameSet.has(lineAccountName)) {
+                matchesAccount = true;
+              } else {
+                // Check for partial match (e.g., "st elmo house" vs "st elmo house (8 lyndhurst)")
+                matchesAccount =
+                  accountNameArray.some((requestedName) => lineAccountName.includes(requestedName)) ||
+                  (accountNameArray.length > 0 && accountNameArray.some((requestedName) => requestedName.includes(lineAccountName)));
+              }
+            }
+
+            if (!matchesAccount) {
+              return;
+            }
+
             // Create unique key: journalID + accountID + lineIndex + amount
             // This ensures we don't duplicate the same journal line
             const journalID = journal.journalID || `journal-${journal.journalNumber}`;
@@ -571,7 +637,7 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
       return dateB - dateA;
     });
 
-    logger.info(`Fetched ${formattedTransactions.length} unique journal entries for October 2025 (deduplicated from ${transactionsMap.size} entries)`);
+    logger.info(`Fetched ${formattedTransactions.length} unique journal entries for October 2025 for selected accounts`);
 
     res.json({
       count: formattedTransactions.length,
