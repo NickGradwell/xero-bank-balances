@@ -4,7 +4,7 @@ import session from 'express-session';
 import { randomUUID } from 'crypto';
 import { config } from './config';
 import { logger } from './utils/logger';
-import { getAuthorizationUrl, exchangeCodeForToken } from './services/xero/auth';
+import { getAuthorizationUrl, exchangeCodeForToken, setTokenSet, getXeroClient } from './services/xero/auth';
 import { XeroService } from './services/xero/client';
 import { XeroTokenSet } from './types/xero';
 
@@ -292,6 +292,88 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
   } catch (error) {
     logger.error('Failed to fetch all transactions', { error });
     res.status(500).json({ error: 'Failed to fetch all transactions' });
+  }
+});
+
+// API endpoint to get 100 transactions (unfiltered, any account)
+app.get('/api/xero/transactions/100', async (req, res): Promise<void> => {
+  try {
+    const tokenSet = req.session.xeroTokenSet;
+
+    if (!tokenSet) {
+      res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+      return;
+    }
+
+    const xeroService = new XeroService(tokenSet);
+    const tenantId = tokenSet.xero_tenant_id;
+    if (!tenantId) {
+      res.status(500).json({ error: 'No tenant ID available' });
+      return;
+    }
+
+    // Fetch first 100 BankTransactions (unfiltered)
+    const validTokenSet = await xeroService.ensureValidToken(tokenSet);
+    await setTokenSet(validTokenSet);
+
+    // Access the client through a helper method or use getXeroClient directly
+    const client = getXeroClient();
+    const response = await client.accountingApi.getBankTransactions(
+      tenantId,
+      undefined, // ifModifiedSince
+      undefined, // where - no filter
+      'Date DESC', // order by date descending
+      1 // page 1
+    );
+
+    const transactions = response.body.bankTransactions || [];
+    const limitedTransactions = transactions.slice(0, 100); // Limit to 100
+
+    // Transform to our format
+    const formattedTransactions = limitedTransactions.map((tx: any) => {
+      let totalAmount = 0;
+      if (tx.lineItems && tx.lineItems.length > 0) {
+        totalAmount = tx.lineItems.reduce((sum: number, item: any) => {
+          return sum + (item.lineAmount || 0);
+        }, 0);
+      } else if (tx.total) {
+        totalAmount = tx.total;
+      }
+
+      const txTypeStr = tx.type ? String(tx.type) : '';
+      const isCredit = txTypeStr === 'RECEIVE' || txTypeStr === 'RECEIVE-OVERPAYMENT' || txTypeStr === 'RECEIVE-PREPAYMENT';
+      const displayAmount = isCredit ? Math.abs(totalAmount) : -Math.abs(totalAmount);
+
+      const currencyCode = tx.currencyCode ? String(tx.currencyCode) : 'GBP';
+      const formattedAmount = new Intl.NumberFormat('en-GB', {
+        style: 'currency',
+        currency: currencyCode,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(displayAmount);
+
+      return {
+        transactionId: tx.bankTransactionID || '',
+        date: tx.date ? new Date(tx.date).toISOString().split('T')[0] : '',
+        description: tx.reference || tx.lineItems?.[0]?.description || '',
+        reference: tx.reference,
+        amount: displayAmount,
+        amountFormatted: formattedAmount,
+        type: txTypeStr,
+        status: tx.status ? String(tx.status) : 'AUTHORISED',
+        bankAccountId: tx.bankAccount?.accountID || '',
+        bankAccountName: tx.bankAccount?.name || '',
+        bankAccountCode: tx.bankAccount?.code || '',
+      };
+    });
+
+    res.json({
+      count: formattedTransactions.length,
+      transactions: formattedTransactions,
+    });
+  } catch (error) {
+    logger.error('Failed to fetch 100 transactions', { error });
+    res.status(500).json({ error: 'Failed to fetch 100 transactions' });
   }
 });
 
