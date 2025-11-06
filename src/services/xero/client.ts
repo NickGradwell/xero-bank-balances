@@ -1031,17 +1031,9 @@ export class XeroService {
               requestedAccountNameLower.includes(lineAccountName);
           }
           
-          // Log first few matches/non-matches for debugging
+          // Log first few matches/non-matches for debugging - include values in message
           if (allJournals.indexOf(journal) < 3 && journal.journalLines.indexOf(line) < 2) {
-            logger.info(`(JOURNALS) Sample line matching:`, {
-              lineAccountId,
-              lineAccountCode,
-              lineAccountName,
-              requestedAccountId: accountId,
-              requestedAccountCode: accountCode,
-              requestedAccountName: requestedAccountNameLower,
-              matchesAccount,
-            });
+            logger.info(`(JOURNALS) SAMPLE LINE - Line Account ID: "${lineAccountId}", Code: "${lineAccountCode}", Name: "${lineAccountName}" | Requested: ID="${accountId}", Code="${accountCode}", Name="${requestedAccountNameLower}" | Match: ${matchesAccount}`);
           }
 
           if (matchesAccount) {
@@ -1089,42 +1081,27 @@ export class XeroService {
         return dateB - dateA;
       });
 
-      // Log debugging information - split into multiple log statements to ensure all info is captured
-      logger.info(`(JOURNALS) Account matching debug - Requested:`, {
-        requestedAccountId: accountId,
-        requestedAccountName: accountName,
-        requestedAccountCode: accountCode,
-      });
+      // Log debugging information - include values directly in message for Railway visibility
+      const requestedAccountNameLower = (accountName || '').toLowerCase().trim();
+      const accountIdsArray = Array.from(accountIdsInJournals).slice(0, 20);
+      const accountNamesArray = Array.from(accountNamesInJournals).slice(0, 20);
+      const accountCodesArray = Array.from(accountCodesInJournals).slice(0, 20);
+      const partialMatches = Array.from(accountNamesInJournals).filter(name => 
+        name.includes(requestedAccountNameLower) || 
+        requestedAccountNameLower.includes(name)
+      ).slice(0, 5);
       
-      logger.info(`(JOURNALS) Account matching debug - Journals:`, {
-        totalJournalsFetched: allJournals.length,
-        journalsInDateRange: allJournals.filter(j => {
-          if (!j.journalDate) return false;
-          const jDate = new Date(j.journalDate);
-          return jDate >= fromDateObj && jDate <= toDateObj;
-        }).length,
-      });
-      
-      logger.info(`(JOURNALS) Account matching debug - Unique accounts in journals (first 20):`, {
-        uniqueAccountIdsCount: accountIdsInJournals.size,
-        uniqueAccountIds: Array.from(accountIdsInJournals).slice(0, 20),
-        uniqueAccountNamesCount: accountNamesInJournals.size,
-        uniqueAccountNames: Array.from(accountNamesInJournals).slice(0, 20),
-        uniqueAccountCodesCount: accountCodesInJournals.size,
-        uniqueAccountCodes: Array.from(accountCodesInJournals).slice(0, 20),
-      });
-      
-      logger.info(`(JOURNALS) Account matching debug - Match results:`, {
-        matchingTransactionsFound: matchingTransactions.length,
-        accountIdInJournals: accountIdsInJournals.has(accountId),
-        accountNameInJournals: accountNamesInJournals.has((accountName || '').toLowerCase().trim()),
-        accountCodeInJournals: accountCodesInJournals.has(accountCode),
-        // Check for partial matches
-        accountNamePartialMatches: Array.from(accountNamesInJournals).filter(name => 
-          name.includes((accountName || '').toLowerCase().trim()) || 
-          (accountName || '').toLowerCase().trim().includes(name)
-        ).slice(0, 5),
-      });
+      logger.info(`(JOURNALS) DEBUG - Requested Account ID: ${accountId}, Name: "${accountName}", Code: "${accountCode}"`);
+      logger.info(`(JOURNALS) DEBUG - Fetched ${allJournals.length} journals in date range`);
+      logger.info(`(JOURNALS) DEBUG - Found ${accountIdsInJournals.size} unique account IDs, ${accountNamesInJournals.size} unique names, ${accountCodesInJournals.size} unique codes`);
+      logger.info(`(JOURNALS) DEBUG - First 10 Account IDs in journals: ${accountIdsArray.slice(0, 10).join(', ')}`);
+      logger.info(`(JOURNALS) DEBUG - First 10 Account Names in journals: ${accountNamesArray.slice(0, 10).map(n => `"${n}"`).join(', ')}`);
+      logger.info(`(JOURNALS) DEBUG - First 10 Account Codes in journals: ${accountCodesArray.slice(0, 10).join(', ')}`);
+      logger.info(`(JOURNALS) DEBUG - Account ID "${accountId}" in journals: ${accountIdsInJournals.has(accountId)}`);
+      logger.info(`(JOURNALS) DEBUG - Account Name "${requestedAccountNameLower}" in journals: ${accountNamesInJournals.has(requestedAccountNameLower)}`);
+      logger.info(`(JOURNALS) DEBUG - Account Code "${accountCode}" in journals: ${accountCodesInJournals.has(accountCode)}`);
+      logger.info(`(JOURNALS) DEBUG - Partial name matches: ${partialMatches.map(n => `"${n}"`).join(', ')}`);
+      logger.info(`(JOURNALS) DEBUG - Matching transactions found: ${matchingTransactions.length}`);
 
       logger.info(`(JOURNALS) Found ${matchingTransactions.length} transactions for account ${accountName} (${accountId})`);
 
