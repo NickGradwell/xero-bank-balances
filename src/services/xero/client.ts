@@ -726,7 +726,14 @@ export class XeroService {
       );
       const transactions = response.body.bankTransactions || [];
       allTransactions = allTransactions.concat(transactions);
-      logger.info(`(ALL) Page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
+      
+      // Log response metadata to understand Xero's pagination behavior
+      const responseBody = response.body as any;
+      logger.info(`(ALL) Page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`, {
+        hasPagination: !!responseBody.pagination,
+        paginationInfo: responseBody.pagination,
+        responseKeys: Object.keys(responseBody),
+      });
       
       // Continue fetching even if we get fewer than pageSize - the API might have more pages
       // Only stop if we get 0 transactions (definitely no more pages)
