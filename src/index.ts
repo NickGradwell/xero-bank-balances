@@ -674,6 +674,16 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
       return dateB - dateA;
     });
 
+    // Log warning if no transactions found
+    if (formattedTransactions.length === 0) {
+      logger.warn('(OCTOBER 2025) No matching transactions found after processing all journals', {
+        requestedAccountIds: Array.from(accountIdSet),
+        requestedAccountCodes: Array.from(accountCodeSet),
+        requestedAccountNames: accountNameArray,
+        note: 'The account identifiers in journals may not match the requested values. Check the sample account identifiers logged earlier.',
+      });
+    }
+
     logger.info(`Fetched ${formattedTransactions.length} unique journal entries for October 2025 for selected accounts`);
 
     res.json({
