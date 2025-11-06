@@ -868,7 +868,21 @@ export class XeroService {
             offset += pageSize;
           }
         } catch (err) {
-          logger.error(`(JOURNALS) Error fetching journals at offset ${offset}`, { error: err });
+          const errorDetails: any = {
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+            offset: offset,
+          };
+          
+          if (err instanceof Error && (err as any).response) {
+            errorDetails.response = {
+              status: (err as any).response?.status,
+              statusText: (err as any).response?.statusText,
+              data: (err as any).response?.data,
+            };
+          }
+          
+          logger.error(`(JOURNALS) Error fetching journals at offset ${offset}`, errorDetails);
           hasMore = false;
         }
       }
