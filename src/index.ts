@@ -284,6 +284,7 @@ app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`, {
     nodeEnv: config.app.nodeEnv,
     port: PORT,
+    deployPing: `deployed-${new Date().toISOString()}`,
   });
 });
 
