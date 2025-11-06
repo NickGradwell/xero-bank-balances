@@ -21,6 +21,9 @@
                     <p class="text-gray-600 mt-1">View all connected bank account balances</p>
                 </div>
                 <div class="flex items-center gap-3">
+                    <button id="october2025Btn" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                        <i class="fas fa-calendar mr-1"></i>October 2025 Transactions
+                    </button>
                     <button id="hundredTransactionsBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
                         <i class="fas fa-list-ol mr-1"></i>100 Transactions
                     </button>
@@ -218,6 +221,64 @@
                                     </tr>
                                 </thead>
                                 <tbody id="hundredTransactionsTable" class="bg-white divide-y divide-gray-200">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- October 2025 Transactions Modal -->
+        <div id="october2025Modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-7xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                <div class="flex items-center justify-between p-6 border-b border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-800">October 2025 Transactions</h2>
+                    <button onclick="closeOctober2025Modal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+                <div class="p-4 bg-gray-50 border-b border-gray-200">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-4">
+                            <button onclick="selectPropertiesOnly()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                <i class="fas fa-filter mr-1"></i>Properties Only
+                            </button>
+                            <button onclick="clearAccountFilters()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                <i class="fas fa-times mr-1"></i>Clear Filters
+                            </button>
+                            <span id="october2025FilterCount" class="text-sm text-gray-600">0 accounts selected</span>
+                        </div>
+                        <span id="october2025TransactionCount" class="text-sm font-medium text-gray-700">0 transactions</span>
+                    </div>
+                    <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg bg-white p-3">
+                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2" id="october2025AccountFilters">
+                            <!-- Account checkboxes will be populated here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-6">
+                    <div id="october2025Loading" class="hidden text-center py-12">
+                        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
+                        <p class="text-gray-600">Loading October 2025 transactions...</p>
+                    </div>
+                    <div id="october2025Error" class="hidden text-center py-4 text-red-600"></div>
+                    <div id="october2025Container" class="hidden">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Journal #</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Name</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Code</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="october2025Table" class="bg-white divide-y divide-gray-200">
                                 </tbody>
                             </table>
                         </div>
@@ -592,6 +653,10 @@
             if (e.target === modal) {
                 closeTransactionsModal();
             }
+            const october2025Modal = document.getElementById('october2025Modal');
+            if (e.target === october2025Modal) {
+                closeOctober2025Modal();
+            }
         });
 
         // Initialize on page load
@@ -609,6 +674,10 @@
                 const hundredBtn = document.getElementById('hundredTransactionsBtn');
                 if (hundredBtn) {
                     hundredBtn.addEventListener('click', () => showHundredTransactions());
+                }
+                const october2025Btn = document.getElementById('october2025Btn');
+                if (october2025Btn) {
+                    october2025Btn.addEventListener('click', () => showOctober2025Transactions());
                 }
             } else {
                 showNotAuthenticatedState();
@@ -723,6 +792,177 @@
             const modal = document.getElementById('hundredTransactionsModal');
             if (modal) {
                 modal.classList.add('hidden');
+            }
+        }
+
+        // October 2025 Transactions modal logic
+        let october2025Transactions = [];
+        let october2025Accounts = [];
+
+        async function showOctober2025Transactions() {
+            const modal = document.getElementById('october2025Modal');
+            const loading = document.getElementById('october2025Loading');
+            const container = document.getElementById('october2025Container');
+            const error = document.getElementById('october2025Error');
+            const table = document.getElementById('october2025Table');
+            const accountFilters = document.getElementById('october2025AccountFilters');
+
+            modal.classList.remove('hidden');
+            loading.classList.remove('hidden');
+            container.classList.add('hidden');
+            error.classList.add('hidden');
+            table.innerHTML = '';
+            accountFilters.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/xero/transactions/october-2025');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Failed to fetch October 2025 transactions');
+
+                october2025Transactions = data.transactions || [];
+                
+                // Extract unique accounts from transactions
+                const accountMap = new Map();
+                october2025Transactions.forEach(tx => {
+                    const key = tx.bankAccountId || tx.bankAccountName || tx.bankAccountCode || '';
+                    if (key && !accountMap.has(key)) {
+                        accountMap.set(key, {
+                            id: tx.bankAccountId || '',
+                            name: tx.bankAccountName || '',
+                            code: tx.bankAccountCode || '',
+                        });
+                    }
+                });
+                october2025Accounts = Array.from(accountMap.values()).sort((a, b) => {
+                    // Sort by code if available, otherwise by name
+                    const aSort = a.code || a.name || '';
+                    const bSort = b.code || b.name || '';
+                    return aSort.localeCompare(bSort);
+                });
+
+                // Build account filter checkboxes
+                accountFilters.innerHTML = october2025Accounts.map(account => {
+                    const accountKey = account.id || account.name || account.code || '';
+                    const displayName = account.name || account.code || account.id || 'Unknown';
+                    const displayCode = account.code ? ` (${account.code})` : '';
+                    return `
+                        <label class="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
+                            <input type="checkbox" 
+                                   class="october2025AccountCheckbox rounded border-gray-300 text-blue-600 focus:ring-blue-500" 
+                                   value="${escapeHtml(accountKey)}"
+                                   data-account-id="${escapeHtml(account.id || '')}"
+                                   data-account-name="${escapeHtml(account.name || '')}"
+                                   data-account-code="${escapeHtml(account.code || '')}"
+                                   onchange="filterOctober2025Transactions()">
+                            <span class="text-sm text-gray-700">${escapeHtml(displayName)}${escapeHtml(displayCode)}</span>
+                        </label>
+                    `;
+                }).join('');
+
+                // Display all transactions initially
+                filterOctober2025Transactions();
+
+                loading.classList.add('hidden');
+                container.classList.remove('hidden');
+            } catch (err) {
+                loading.classList.add('hidden');
+                error.classList.remove('hidden');
+                error.textContent = err.message || 'Failed to load October 2025 transactions';
+            }
+        }
+
+        function closeOctober2025Modal() {
+            const modal = document.getElementById('october2025Modal');
+            modal.classList.add('hidden');
+            october2025Transactions = [];
+            october2025Accounts = [];
+        }
+
+        function selectPropertiesOnly() {
+            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox');
+            checkboxes.forEach(checkbox => {
+                const accountCode = checkbox.getAttribute('data-account-code') || '';
+                // Properties Only = accounts that DON'T start with 3 digits
+                const isProperty = accountCode && !/^\d{3}/.test(accountCode);
+                checkbox.checked = isProperty;
+            });
+            filterOctober2025Transactions();
+        }
+
+        function clearAccountFilters() {
+            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            filterOctober2025Transactions();
+        }
+
+        function filterOctober2025Transactions() {
+            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox:checked');
+            const selectedAccountIds = new Set();
+            const selectedAccountNames = new Set();
+            const selectedAccountCodes = new Set();
+
+            checkboxes.forEach(checkbox => {
+                const accountId = checkbox.getAttribute('data-account-id') || '';
+                const accountName = (checkbox.getAttribute('data-account-name') || '').toLowerCase().trim();
+                const accountCode = checkbox.getAttribute('data-account-code') || '';
+                
+                if (accountId) selectedAccountIds.add(accountId);
+                if (accountName) selectedAccountNames.add(accountName);
+                if (accountCode) selectedAccountCodes.add(accountCode);
+            });
+
+            // Filter transactions
+            let filteredTransactions = october2025Transactions;
+            
+            if (selectedAccountIds.size > 0 || selectedAccountNames.size > 0 || selectedAccountCodes.size > 0) {
+                filteredTransactions = october2025Transactions.filter(tx => {
+                    const txAccountId = tx.bankAccountId || '';
+                    const txAccountName = (tx.bankAccountName || '').toLowerCase().trim();
+                    const txAccountCode = tx.bankAccountCode || '';
+                    
+                    return selectedAccountIds.has(txAccountId) ||
+                           selectedAccountNames.has(txAccountName) ||
+                           selectedAccountCodes.has(txAccountCode);
+                });
+            }
+
+            // Limit to 500 transactions
+            filteredTransactions = filteredTransactions.slice(0, 500);
+
+            // Update filter count
+            const filterCount = document.getElementById('october2025FilterCount');
+            if (filterCount) {
+                filterCount.textContent = `${checkboxes.length} account${checkboxes.length !== 1 ? 's' : ''} selected`;
+            }
+
+            // Update transaction count
+            const transactionCount = document.getElementById('october2025TransactionCount');
+            if (transactionCount) {
+                transactionCount.textContent = `${filteredTransactions.length} transaction${filteredTransactions.length !== 1 ? 's' : ''}`;
+            }
+
+            // Display filtered transactions
+            const table = document.getElementById('october2025Table');
+            if (table) {
+                if (filteredTransactions.length > 0) {
+                    const rows = filteredTransactions.map(tx => `
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.journalNumber?.toString() || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>
+                            <td class="px-4 py-2 text-sm text-gray-700">${escapeHtml(tx.description || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(tx.amountFormatted || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
+                        </tr>
+                    `).join('');
+                    table.innerHTML = rows;
+                } else {
+                    table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">No transactions match the selected filters</td></tr>';
+                }
             }
         }
     </script>

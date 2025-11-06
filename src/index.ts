@@ -393,6 +393,127 @@ app.get('/api/xero/transactions/100', async (req, res): Promise<void> => {
   }
 });
 
+// API endpoint to get October 2025 transactions (up to 500)
+app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> => {
+  try {
+    const tokenSet = req.session.xeroTokenSet;
+
+    if (!tokenSet) {
+      res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+      return;
+    }
+
+    const xeroService = new XeroService(tokenSet);
+    const tenantId = tokenSet.xero_tenant_id;
+    if (!tenantId) {
+      res.status(500).json({ error: 'No tenant ID available' });
+      return;
+    }
+
+    // October 2025 date range
+    const fromDate = '2025-10-01';
+    const toDate = '2025-10-31';
+
+    // Fetch journals for October 2025
+    const validTokenSet = await xeroService.ensureValidToken(tokenSet);
+    await setTokenSet(validTokenSet);
+
+    const client = getXeroClient();
+    
+    // Fetch journals with pagination until we have 500 entries or run out
+    const formattedTransactions: any[] = [];
+    let offset = 0;
+    const maxTransactions = 500;
+    const fromDateObj = new Date(fromDate);
+    fromDateObj.setHours(0, 0, 0, 0);
+    const toDateObj = new Date(toDate);
+    toDateObj.setHours(23, 59, 59, 999);
+
+    while (formattedTransactions.length < maxTransactions) {
+      const response = await client.accountingApi.getJournals(
+        tenantId,
+        fromDateObj, // ifModifiedSince - filter by date
+        offset,
+        false // paymentsOnly - false = get all journals
+      );
+
+      const journals = response.body.journals || [];
+      if (journals.length === 0) break; // No more journals
+
+      for (const journal of journals) {
+        if (!journal.journalLines || journal.journalLines.length === 0) continue;
+        
+        // Check if journal date is within October 2025
+        const journalDate = journal.journalDate ? new Date(journal.journalDate) : null;
+        if (!journalDate || journalDate < fromDateObj || journalDate > toDateObj) {
+          continue;
+        }
+
+        // Each journal line represents a transaction entry
+        for (const line of journal.journalLines) {
+          if (formattedTransactions.length >= maxTransactions) break;
+
+          const amount = line.netAmount || line.grossAmount || 0;
+          const currencyCode = 'GBP';
+          
+          const formattedAmount = new Intl.NumberFormat('en-GB', {
+            style: 'currency',
+            currency: currencyCode,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          }).format(amount);
+
+          let description = journal.reference || journal.sourceID || '';
+          if (!description && line.description) {
+            description = line.description;
+          }
+          if (!description) {
+            description = journal.journalNumber?.toString() || 'Journal Entry';
+          }
+
+          formattedTransactions.push({
+            transactionId: journal.journalID || `journal-${journal.journalNumber}`,
+            date: journal.journalDate ? new Date(journal.journalDate).toISOString().split('T')[0] : '',
+            description: description,
+            reference: journal.reference || journal.sourceID,
+            amount: amount,
+            amountFormatted: formattedAmount,
+            type: amount >= 0 ? 'DEBIT' : 'CREDIT',
+            status: journal.createdDateUTC ? 'AUTHORISED' : 'DRAFT',
+            bankAccountId: line.accountID || '',
+            bankAccountName: line.accountName || '',
+            bankAccountCode: line.accountCode || '',
+            journalNumber: journal.journalNumber,
+            journalID: journal.journalID,
+          });
+        }
+
+        if (formattedTransactions.length >= maxTransactions) break;
+      }
+
+      // If we got fewer than 100 journals, we've reached the end
+      if (journals.length < 100) break;
+      
+      offset += 100;
+      
+      // Add delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1100));
+    }
+
+    logger.info(`Fetched ${formattedTransactions.length} journal entries for October 2025`);
+
+    res.json({
+      count: formattedTransactions.length,
+      transactions: formattedTransactions,
+      fromDate,
+      toDate,
+    });
+  } catch (error) {
+    logger.error('Failed to fetch October 2025 transactions', { error });
+    res.status(500).json({ error: 'Failed to fetch October 2025 transactions' });
+  }
+});
+
 // API endpoint to get bank transactions for a specific account
 app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<void> => {
   try {
