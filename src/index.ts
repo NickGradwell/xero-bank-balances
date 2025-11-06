@@ -483,6 +483,12 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
         }
 
         let journalsInRange = 0;
+        const sampleAccountIds = new Set<string>();
+        const sampleAccountNames = new Set<string>();
+        const sampleAccountCodes = new Set<string>();
+        let sampleCount = 0;
+        const maxSamples = 20;
+
         for (const journal of journals) {
           if (!journal.journalLines || journal.journalLines.length === 0) continue;
           
@@ -493,6 +499,16 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
           }
 
           journalsInRange++;
+
+          // Collect sample account identifiers for debugging (first few journals)
+          if (sampleCount < maxSamples) {
+            journal.journalLines.forEach((line) => {
+              if (line.accountID) sampleAccountIds.add(line.accountID);
+              if (line.accountName) sampleAccountNames.add(line.accountName.toLowerCase().trim());
+              if (line.accountCode) sampleAccountCodes.add(line.accountCode.toLowerCase());
+            });
+            sampleCount++;
+          }
 
           // Each journal line represents a transaction entry
           // Use line index to create unique key for each line in a journal
@@ -511,6 +527,16 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
 
             if (!matchesAccount && lineAccountCode && accountCodeSet.has(lineAccountCode)) {
               matchesAccount = true;
+            }
+
+            // Try partial name matching (for cases like "The Forest" matching "The Forest (address)")
+            if (!matchesAccount && lineAccountName && accountNameArray.length > 0) {
+              for (const requestedName of accountNameArray) {
+                if (lineAccountName.includes(requestedName) || requestedName.includes(lineAccountName)) {
+                  matchesAccount = true;
+                  break;
+                }
+              }
             }
 
             if (!matchesAccount && lineAccountName) {
@@ -579,6 +605,17 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
 
         if (journalsInRange > 0) {
           consecutiveOutOfRangePages = 0;
+          // Log sample account identifiers on first page for debugging
+          if (offset === 0 && transactionsMap.size === 0) {
+            logger.info('(OCTOBER 2025) Sample account identifiers found in journals:', {
+              sampleAccountIds: Array.from(sampleAccountIds).slice(0, 10),
+              sampleAccountNames: Array.from(sampleAccountNames).slice(0, 10),
+              sampleAccountCodes: Array.from(sampleAccountCodes).slice(0, 10),
+              requestedAccountIds: Array.from(accountIdSet),
+              requestedAccountCodes: Array.from(accountCodeSet),
+              requestedAccountNames: accountNameArray,
+            });
+          }
           logger.info(`Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange} in date range (total unique transactions: ${transactionsMap.size})`);
         } else {
           consecutiveOutOfRangePages++;
