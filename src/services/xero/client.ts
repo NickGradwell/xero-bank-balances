@@ -839,32 +839,62 @@ export class XeroService {
         toDate,
       });
 
-      // Fetch all journals with pagination
+      // Fetch journals with pagination, but limit by date range
+      // Use ifModifiedSince to filter at API level (more efficient than fetching all)
       // Xero rate limit: 60 requests per minute, so we need to throttle requests
       let allJournals: Journal[] = [];
       let offset = 0;
       const pageSize = 100;
-      const maxPages = 100; // Safety limit (10,000 journals max)
+      const maxPages = 50; // Reduced limit - we'll stop early if we have enough data
       let hasMore = true;
       
       // Rate limiting: Xero allows 60 requests/minute, so we'll add a small delay
-      // We'll fetch in batches and add delays to stay under the limit
       const delayBetweenRequests = 1100; // 1.1 seconds between requests (55 requests/minute to be safe)
+      
+      // Use ifModifiedSince to filter journals by date at API level
+      // This reduces the number of journals we need to fetch
+      const ifModifiedSince = fromDateObj; // Only fetch journals modified since fromDate
+      
+      // Stop fetching if we've found enough transactions in the date range
+      let consecutiveOutOfRangePages = 0;
+      const maxConsecutiveOutOfRangePages = 3; // Stop after 3 consecutive pages with no matching dates
 
       while (hasMore && offset < maxPages * pageSize) {
         try {
-          logger.info(`(JOURNALS) Attempting to fetch journals at offset ${offset}`);
+          logger.info(`(JOURNALS) Attempting to fetch journals at offset ${offset} (fromDate: ${fromDate}, toDate: ${toDate})`);
           const response = await this.client.accountingApi.getJournals(
             tenantId,
-            undefined, // ifModifiedSince (optional Date)
+            ifModifiedSince, // Filter by date at API level
             offset, // offset for pagination
             false // paymentsOnly (false = get all journals, not just payment journals)
           );
 
           const journals = response.body.journals || [];
-          allJournals = allJournals.concat(journals);
-
-          logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals (total so far: ${allJournals.length})`);
+          
+          // Check if any journals in this page are within our date range
+          const journalsInRange = journals.filter(j => {
+            if (!j.journalDate) return false;
+            const jDate = new Date(j.journalDate);
+            return jDate >= fromDateObj && jDate <= toDateObj;
+          });
+          
+          if (journalsInRange.length > 0) {
+            // Found journals in date range, reset counter
+            consecutiveOutOfRangePages = 0;
+            allJournals = allJournals.concat(journalsInRange); // Only add journals in date range
+            logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange.length} in date range (total in range: ${allJournals.length})`);
+          } else {
+            // No journals in date range on this page
+            consecutiveOutOfRangePages++;
+            logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals, 0 in date range (consecutive out-of-range pages: ${consecutiveOutOfRangePages})`);
+            
+            // Stop if we've had multiple consecutive pages with no matching dates
+            if (consecutiveOutOfRangePages >= maxConsecutiveOutOfRangePages) {
+              logger.info(`(JOURNALS) Stopping pagination: ${consecutiveOutOfRangePages} consecutive pages with no journals in date range`);
+              hasMore = false;
+              break;
+            }
+          }
 
           // If we got fewer than pageSize, we've reached the end
           if (journals.length < pageSize) {
@@ -908,9 +938,9 @@ export class XeroService {
         }
       }
 
-      logger.info(`(JOURNALS) Finished pagination: fetched ${allJournals.length} total journals`);
+      logger.info(`(JOURNALS) Finished pagination: fetched ${allJournals.length} total journals in date range`);
 
-      // Filter journals by account and date range
+      // Filter journals by account (date range already filtered during fetch)
       const matchingTransactions: BankTransaction[] = [];
       
       // Log sample journal data for debugging
@@ -934,11 +964,11 @@ export class XeroService {
       const accountCodesInJournals = new Set<string>();
 
       for (const journal of allJournals) {
-        // Check if journal date is within range
+        // Date range already filtered during fetch, but double-check
         if (!journal.journalDate) continue;
         const journalDate = new Date(journal.journalDate);
         if (journalDate < fromDateObj || journalDate > toDateObj) {
-          continue;
+          continue; // Shouldn't happen, but safety check
         }
 
         // Check journal lines for matching account
