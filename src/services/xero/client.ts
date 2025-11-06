@@ -194,23 +194,32 @@ export class XeroService {
         throw new Error('No tenant ID available');
       }
 
-      // Try using where clause to filter by account - Xero API supports filtering
-      // According to Xero docs, we can filter by BankAccount.AccountID using Guid syntax
-      // Format: BankAccount.AccountID=Guid("account-id")
-      let where: string | undefined = undefined;
-      
-      // Enable where clause to filter by account ID - this should return only transactions for this account
-      // This is crucial because otherwise the API returns transactions from ALL accounts (limited to ~45)
-      if (accountId) {
-        where = `BankAccount.AccountID=Guid("${accountId}")`;
-        logger.info(`Using where clause to filter by account ID: ${where}`);
-      }
-      
       // Convert date strings to Date objects for client-side filtering
       const fromDateObj = new Date(fromDate);
       fromDateObj.setHours(0, 0, 0, 0); // Start of day
       const toDateObj = new Date(toDate);
       toDateObj.setHours(23, 59, 59, 999); // End of day
+
+      // Try using where clause to filter by account AND date range - Xero API supports filtering
+      // According to Xero docs, we can filter by BankAccount.AccountID using Guid syntax
+      // Format: BankAccount.AccountID=Guid("account-id") AND Date >= DateTime(...) AND Date <= DateTime(...)
+      let where: string | undefined = undefined;
+      
+      // Format dates for Xero where clause: DateTime(YYYY, MM, DD)
+      const formatDateForWhere = (date: Date): string => {
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
+        const day = date.getDate();
+        return `DateTime(${year}, ${month}, ${day})`;
+      };
+      
+      // Enable where clause to filter by account ID and date range
+      // This should return only transactions for this account in the specified date range
+      if (accountId) {
+        // Try with date range in where clause first
+        where = `BankAccount.AccountID=Guid("${accountId}") AND Date >= ${formatDateForWhere(fromDateObj)} AND Date <= ${formatDateForWhere(toDateObj)}`;
+        logger.info(`Using where clause with account ID and date range: ${where}`);
+      }
 
       logger.info('Fetching bank transactions', {
         accountId,
@@ -241,7 +250,7 @@ export class XeroService {
       while (hasMore && page <= maxPages) {
         const response = await this.client.accountingApi.getBankTransactions(
           tenantId,
-          undefined, // ifModifiedSince
+          undefined, // ifModifiedSince - set to undefined to get all transactions regardless of modification date
           where,
           'Date DESC', // order by date descending
           page,
@@ -251,18 +260,24 @@ export class XeroService {
         const transactions = response.body.bankTransactions || [];
         allTransactions = allTransactions.concat(transactions);
         
-        logger.info(`Fetched page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
+        // Log response metadata if available
+        const responseBody = response.body as any;
+        logger.info(`Fetched page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`, {
+          hasPagination: !!responseBody.pagination,
+          paginationInfo: responseBody.pagination,
+          responseKeys: Object.keys(responseBody),
+        });
         
-        // If we got fewer than pageSize, we've reached the end
-        if (transactions.length < pageSize) {
+        // Check if there are more pages - continue fetching even if < pageSize
+        // Only stop if we get 0 transactions (definitely no more pages)
+        if (transactions.length === 0) {
           hasMore = false;
-          logger.info(`Pagination complete: received ${transactions.length} transactions (less than page size ${pageSize})`);
+          logger.info(`Pagination complete: page ${page} returned 0 transactions`);
         } else {
+          // Continue to next page even if we got fewer than pageSize
+          // The API might return fewer records per page but still have more pages
           page++;
         }
-        
-        // Safety check: if we got exactly pageSize, there might be more pages
-        // Continue fetching until we get fewer than pageSize
       }
       
       logger.info(`Pagination finished: fetched ${allTransactions.length} total transactions across ${page - 1} page(s)`);
@@ -354,15 +369,22 @@ export class XeroService {
             while (diagPage <= diagMaxPages) {
               const diagResp = await this.client.accountingApi.getBankTransactions(
                 tenantId,
-                undefined,
-                undefined,
+                undefined, // ifModifiedSince - undefined to get all
+                undefined, // where - undefined to get all accounts
                 'Date DESC',
                 diagPage,
                 undefined
               );
               const txs = diagResp.body.bankTransactions || [];
               diagnosticTransactions.push(...txs);
-              logger.info(`(DIAG) Page ${diagPage}: ${txs.length} transactions (total so far: ${diagnosticTransactions.length})`);
+              
+              // Log response metadata
+              const diagResponseBody = diagResp.body as any;
+              logger.info(`(DIAG) Page ${diagPage}: ${txs.length} transactions (total so far: ${diagnosticTransactions.length})`, {
+                hasPagination: !!diagResponseBody.pagination,
+                paginationInfo: diagResponseBody.pagination,
+              });
+              
               // Continue fetching even if < pageSize - only stop if 0 transactions
               if (txs.length === 0) {
                 logger.info(`(DIAG) Page ${diagPage} returned 0 transactions, stopping diagnostics pagination`);
