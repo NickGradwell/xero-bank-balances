@@ -262,8 +262,8 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
       return;
     }
 
-        // Get transactions for "The Forest" account using BankTransactions endpoint
-        const transactions = await xeroService.getBankTransactions(
+        // Get transactions for "The Forest" account using Account Transactions Report
+        const transactions = await xeroService.getAccountTransactionsReport(
           tokenSet,
           forestAccount.accountId,
           forestAccount.name,
@@ -347,8 +347,8 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
           }
         }
         
-        // Use BankTransactions endpoint - this is the correct endpoint for bank account transactions
-        const transactions = await xeroService.getBankTransactions(
+        // Use Account Transactions Report - combines BankTransactions + Payments + BankTransfers
+        const transactions = await xeroService.getAccountTransactionsReport(
           tokenSet,
           accountId,
           accountName || '',

@@ -1,4 +1,4 @@
-import { XeroClient, Account, AccountType, BankTransaction as XeroBankTransaction, Journal } from 'xero-node';
+import { XeroClient, Account, AccountType, BankTransaction as XeroBankTransaction, Journal, Payment, BankTransfer } from 'xero-node';
 import { logger } from '../../utils/logger';
 import { BankAccount, BankTransaction } from '../../types/xero';
 import { getXeroClient, setTokenSet, isTokenExpired, refreshAccessToken } from './auth';
@@ -1121,6 +1121,449 @@ export class XeroService {
       }
 
       logger.error('Failed to fetch account transactions from journals', errorDetails);
+      throw error;
+    }
+  }
+
+  /**
+   * Get Account Transactions Report - combines BankTransactions, Payments, and BankTransfers
+   * This provides a comprehensive view of all transactions for a bank account
+   */
+  async getAccountTransactionsReport(
+    tokenSet: XeroTokenSet,
+    accountId: string,
+    accountName: string,
+    accountCode: string,
+    fromDate: string,
+    toDate: string
+  ): Promise<BankTransaction[]> {
+    try {
+      const validTokenSet = await this.ensureValidToken(tokenSet);
+      await setTokenSet(validTokenSet);
+
+      const tenantId = validTokenSet.xero_tenant_id;
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+
+      logger.info('(ACCOUNT TRANSACTIONS REPORT) Starting comprehensive transaction fetch', {
+        accountId,
+        accountName,
+        accountCode,
+        fromDate,
+        toDate,
+      });
+
+      const fromDateObj = new Date(fromDate);
+      fromDateObj.setHours(0, 0, 0, 0);
+      const toDateObj = new Date(toDate);
+      toDateObj.setHours(23, 59, 59, 999);
+
+      // 1. Get BankTransactions
+      logger.info('(ACCOUNT TRANSACTIONS REPORT) Fetching BankTransactions...');
+      const bankTransactions = await this.getBankTransactions(
+        tokenSet,
+        accountId,
+        accountName,
+        accountCode,
+        fromDate,
+        toDate
+      );
+      logger.info(`(ACCOUNT TRANSACTIONS REPORT) Found ${bankTransactions.length} BankTransactions`);
+
+      // 2. Get Payments
+      logger.info('(ACCOUNT TRANSACTIONS REPORT) Fetching Payments...');
+      const payments = await this.getPaymentsForAccount(
+        tokenSet,
+        accountId,
+        accountName,
+        accountCode,
+        fromDate,
+        toDate
+      );
+      logger.info(`(ACCOUNT TRANSACTIONS REPORT) Found ${payments.length} Payments`);
+
+      // 3. Get BankTransfers
+      logger.info('(ACCOUNT TRANSACTIONS REPORT) Fetching BankTransfers...');
+      const bankTransfers = await this.getBankTransfersForAccount(
+        tokenSet,
+        accountId,
+        accountName,
+        accountCode,
+        fromDate,
+        toDate
+      );
+      logger.info(`(ACCOUNT TRANSACTIONS REPORT) Found ${bankTransfers.length} BankTransfers`);
+
+      // 4. Combine all transactions
+      const allTransactions = [
+        ...bankTransactions,
+        ...payments,
+        ...bankTransfers,
+      ];
+
+      // 5. Sort by date (most recent first)
+      allTransactions.sort((a, b) => {
+        const dateA = new Date(a.date).getTime();
+        const dateB = new Date(b.date).getTime();
+        return dateB - dateA;
+      });
+
+      logger.info(`(ACCOUNT TRANSACTIONS REPORT) Total transactions: ${allTransactions.length} (${bankTransactions.length} BankTransactions + ${payments.length} Payments + ${bankTransfers.length} BankTransfers)`);
+
+      return allTransactions;
+    } catch (error) {
+      const errorDetails: any = {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      };
+
+      if (error instanceof Error && (error as any).response) {
+        errorDetails.response = {
+          status: (error as any).response?.status,
+          statusText: (error as any).response?.statusText,
+          data: (error as any).response?.data,
+        };
+      }
+
+      logger.error('Failed to fetch account transactions report', errorDetails);
+      throw error;
+    }
+  }
+
+  /**
+   * Get Payments for a specific bank account
+   */
+  async getPaymentsForAccount(
+    tokenSet: XeroTokenSet,
+    accountId: string,
+    accountName: string,
+    accountCode: string,
+    fromDate: string,
+    toDate: string
+  ): Promise<BankTransaction[]> {
+    try {
+      const validTokenSet = await this.ensureValidToken(tokenSet);
+      await setTokenSet(validTokenSet);
+
+      const tenantId = validTokenSet.xero_tenant_id;
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+
+      const fromDateObj = new Date(fromDate);
+      fromDateObj.setHours(0, 0, 0, 0);
+      const toDateObj = new Date(toDate);
+      toDateObj.setHours(23, 59, 59, 999);
+
+      logger.info('(PAYMENTS) Fetching payments', { accountId, accountName, accountCode, fromDate, toDate });
+
+      // Fetch all payments with pagination
+      let allPayments: Payment[] = [];
+      let page = 1;
+      const maxPages = 50;
+      let hasMore = true;
+
+      while (hasMore && page <= maxPages) {
+        try {
+          const response = await this.client.accountingApi.getPayments(
+            tenantId,
+            undefined, // ifModifiedSince
+            undefined, // where - we'll filter client-side
+            'Date DESC',
+            page
+          );
+
+          const payments = response.body.payments || [];
+          allPayments = allPayments.concat(payments);
+
+          logger.info(`(PAYMENTS) Fetched page ${page}: ${payments.length} payments (total so far: ${allPayments.length})`);
+
+          if (payments.length === 0) {
+            hasMore = false;
+          } else {
+            page++;
+            // Rate limiting: 1.1 seconds between requests
+            if (hasMore && page <= maxPages) {
+              await new Promise(resolve => setTimeout(resolve, 1100));
+            }
+          }
+        } catch (err) {
+          const errorDetails: any = {
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+            page: page,
+          };
+
+          if (err instanceof Error && (err as any).response) {
+            const response = (err as any).response;
+            errorDetails.response = {
+              status: response?.status,
+              statusText: response?.statusText,
+              data: response?.data,
+            };
+
+            if (response?.status === 429) {
+              const retryAfter = parseInt(response?.headers?.['retry-after'] || '60', 10);
+              logger.warn(`(PAYMENTS) Rate limit hit. Waiting ${retryAfter} seconds before retrying...`);
+              await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+              continue;
+            }
+          }
+
+          logger.error(`(PAYMENTS) Error fetching payments at page ${page}`, errorDetails);
+          hasMore = false;
+        }
+      }
+
+      logger.info(`(PAYMENTS) Finished pagination: fetched ${allPayments.length} total payments`);
+
+      // Filter payments by account and date
+      const matchingPayments: BankTransaction[] = [];
+      const requestedAccountNameLower = (accountName || '').toLowerCase().trim();
+
+      for (const payment of allPayments) {
+        // Check if payment date is in range
+        if (!payment.date) continue;
+        const paymentDate = new Date(payment.date);
+        if (paymentDate < fromDateObj || paymentDate > toDateObj) continue;
+
+        // Check if payment is for this bank account
+        // Payments have an Account field that references the bank account
+        const paymentAccountId = (payment.account as any)?.accountID;
+        const paymentAccountName = (payment.account as any)?.name || '';
+        const paymentAccountCode = (payment.account as any)?.code || '';
+
+        let matchesAccount =
+          (accountId && paymentAccountId === accountId) ||
+          (accountCode && paymentAccountCode === accountCode) ||
+          (accountName && paymentAccountName.toLowerCase().trim() === requestedAccountNameLower);
+
+        // Try partial name matching
+        if (!matchesAccount && accountName && paymentAccountName) {
+          const paymentAccountNameLower = paymentAccountName.toLowerCase().trim();
+          matchesAccount =
+            paymentAccountNameLower.includes(requestedAccountNameLower) ||
+            requestedAccountNameLower.includes(paymentAccountNameLower);
+        }
+
+        if (matchesAccount) {
+          const amount = payment.amount || 0;
+          // Payments don't have currencyCode directly, use account currency or default
+          const currencyCode = (payment.account as any)?.currencyCode ? String((payment.account as any).currencyCode) : 'GBP';
+          const formattedAmount = new Intl.NumberFormat('en-GB', {
+            style: 'currency',
+            currency: currencyCode,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          }).format(amount);
+
+          matchingPayments.push({
+            transactionId: payment.paymentID || `payment-${payment.paymentID}`,
+            date: payment.date ? new Date(payment.date).toISOString().split('T')[0] : '',
+            description: payment.reference || `Payment ${payment.paymentID || ''}`,
+            reference: payment.reference,
+            amount: amount,
+            amountFormatted: formattedAmount,
+            type: amount >= 0 ? 'CREDIT' : 'DEBIT',
+            status: 'AUTHORISED', // Payments are typically authorised
+            contactName: undefined, // Payment contact info not directly available
+            isReconciled: false,
+          });
+        }
+      }
+
+      logger.info(`(PAYMENTS) Found ${matchingPayments.length} matching payments for account ${accountName}`);
+
+      return matchingPayments;
+    } catch (error) {
+      const errorDetails: any = {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      };
+
+      if (error instanceof Error && (error as any).response) {
+        errorDetails.response = {
+          status: (error as any).response?.status,
+          statusText: (error as any).response?.statusText,
+          data: (error as any).response?.data,
+        };
+      }
+
+      logger.error('Failed to fetch payments for account', errorDetails);
+      throw error;
+    }
+  }
+
+  /**
+   * Get BankTransfers for a specific bank account
+   */
+  async getBankTransfersForAccount(
+    tokenSet: XeroTokenSet,
+    accountId: string,
+    accountName: string,
+    accountCode: string,
+    fromDate: string,
+    toDate: string
+  ): Promise<BankTransaction[]> {
+    try {
+      const validTokenSet = await this.ensureValidToken(tokenSet);
+      await setTokenSet(validTokenSet);
+
+      const tenantId = validTokenSet.xero_tenant_id;
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+
+      const fromDateObj = new Date(fromDate);
+      fromDateObj.setHours(0, 0, 0, 0);
+      const toDateObj = new Date(toDate);
+      toDateObj.setHours(23, 59, 59, 999);
+
+      logger.info('(BANK TRANSFERS) Fetching bank transfers', { accountId, accountName, accountCode, fromDate, toDate });
+
+      // Fetch all bank transfers
+      // Note: getBankTransfers doesn't support pagination the same way, so we fetch all at once
+      let allTransfers: BankTransfer[] = [];
+
+      try {
+        const response = await this.client.accountingApi.getBankTransfers(
+          tenantId,
+          undefined, // ifModifiedSince
+          undefined, // where - we'll filter client-side
+          'Date DESC'
+        );
+
+        const transfers = response.body.bankTransfers || [];
+        allTransfers = transfers;
+
+        logger.info(`(BANK TRANSFERS) Fetched ${transfers.length} bank transfers`);
+      } catch (err) {
+        const errorDetails: any = {
+          message: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        };
+
+        if (err instanceof Error && (err as any).response) {
+          const response = (err as any).response;
+          errorDetails.response = {
+            status: response?.status,
+            statusText: response?.statusText,
+            data: response?.data,
+          };
+        }
+
+        logger.error(`(BANK TRANSFERS) Error fetching bank transfers`, errorDetails);
+        // Continue with empty array if fetch fails
+        allTransfers = [];
+      }
+
+      logger.info(`(BANK TRANSFERS) Finished fetching: ${allTransfers.length} total bank transfers`);
+
+      // Filter transfers by account (either from or to account) and date
+      const matchingTransfers: BankTransaction[] = [];
+      const requestedAccountNameLower = (accountName || '').toLowerCase().trim();
+
+      for (const transfer of allTransfers) {
+        // Check if transfer date is in range
+        if (!transfer.date) continue;
+        const transferDate = new Date(transfer.date);
+        if (transferDate < fromDateObj || transferDate > toDateObj) continue;
+
+        // Check if transfer involves this bank account (either from or to)
+        const fromAccountId = (transfer.fromBankAccount as any)?.accountID;
+        const fromAccountName = (transfer.fromBankAccount as any)?.name || '';
+        const fromAccountCode = (transfer.fromBankAccount as any)?.code || '';
+
+        const toAccountId = (transfer.toBankAccount as any)?.accountID;
+        const toAccountName = (transfer.toBankAccount as any)?.name || '';
+        const toAccountCode = (transfer.toBankAccount as any)?.code || '';
+
+        let matchesAccount = false;
+
+        // Check from account
+        matchesAccount = Boolean(
+          (accountId && fromAccountId === accountId) ||
+          (accountCode && fromAccountCode === accountCode) ||
+          (accountName && fromAccountName.toLowerCase().trim() === requestedAccountNameLower)
+        );
+
+        // Check to account if not matched yet
+        if (!matchesAccount) {
+          matchesAccount = Boolean(
+            (accountId && toAccountId === accountId) ||
+            (accountCode && toAccountCode === accountCode) ||
+            (accountName && toAccountName.toLowerCase().trim() === requestedAccountNameLower)
+          );
+        }
+
+        // Try partial name matching
+        if (!matchesAccount && accountName) {
+          if (fromAccountName) {
+            const fromAccountNameLower = fromAccountName.toLowerCase().trim();
+            matchesAccount =
+              fromAccountNameLower.includes(requestedAccountNameLower) ||
+              requestedAccountNameLower.includes(fromAccountNameLower);
+          }
+          if (!matchesAccount && toAccountName) {
+            const toAccountNameLower = toAccountName.toLowerCase().trim();
+            matchesAccount =
+              toAccountNameLower.includes(requestedAccountNameLower) ||
+              requestedAccountNameLower.includes(toAccountNameLower);
+          }
+        }
+
+        if (matchesAccount) {
+          const amount = transfer.amount || 0;
+          // BankTransfers don't have currencyCode directly, use from account currency or default
+          const currencyCode = (transfer.fromBankAccount as any)?.currencyCode ? String((transfer.fromBankAccount as any).currencyCode) : 'GBP';
+          const formattedAmount = new Intl.NumberFormat('en-GB', {
+            style: 'currency',
+            currency: currencyCode,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          }).format(Math.abs(amount));
+
+          // Determine if this is an outgoing (debit) or incoming (credit) transfer
+          const isOutgoing = Boolean(
+            (accountId && fromAccountId === accountId) ||
+            (accountCode && fromAccountCode === accountCode) ||
+            (accountName && fromAccountName.toLowerCase().trim() === requestedAccountNameLower)
+          );
+
+          matchingTransfers.push({
+            transactionId: transfer.bankTransferID || `transfer-${transfer.bankTransferID}`,
+            date: transfer.date ? new Date(transfer.date).toISOString().split('T')[0] : '',
+            description: `Transfer ${isOutgoing ? 'to' : 'from'} ${isOutgoing ? toAccountName : fromAccountName}`,
+            reference: transfer.reference,
+            amount: isOutgoing ? -Math.abs(amount) : Math.abs(amount),
+            amountFormatted: formattedAmount,
+            type: isOutgoing ? 'DEBIT' : 'CREDIT',
+            status: 'AUTHORISED', // Bank transfers are typically authorised
+            contactName: undefined,
+            isReconciled: false,
+          });
+        }
+      }
+
+      logger.info(`(BANK TRANSFERS) Found ${matchingTransfers.length} matching bank transfers for account ${accountName}`);
+
+      return matchingTransfers;
+    } catch (error) {
+      const errorDetails: any = {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      };
+
+      if (error instanceof Error && (error as any).response) {
+        errorDetails.response = {
+          status: (error as any).response?.status,
+          statusText: (error as any).response?.statusText,
+          data: (error as any).response?.data,
+        };
+      }
+
+      logger.error('Failed to fetch bank transfers for account', errorDetails);
       throw error;
     }
   }
