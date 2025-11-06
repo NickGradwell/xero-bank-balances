@@ -100,22 +100,40 @@ export async function exchangeCodeForToken(
   }
 }
 
-export async function refreshAccessToken(refreshToken: string): Promise<XeroTokenSet> {
+export async function refreshAccessToken(refreshToken: string, tenantId?: string): Promise<XeroTokenSet> {
   try {
     const client = getXeroClient();
-    // Set the refresh token first
+    
+    // Set the refresh token on the client first
     client.setTokenSet({
       refresh_token: refreshToken,
     } as any);
     
-    // Refresh the token - need to pass tenantId, redirectUri, and scope
-    const tenantId = client.tenants?.[0]?.tenantId || '';
-    if (!tenantId) {
-      throw new Error('No tenant ID available for token refresh');
+    // If tenantId is provided, use it; otherwise try to get from client
+    let effectiveTenantId = tenantId || client.tenants?.[0]?.tenantId || '';
+    
+    // If we still don't have tenantId, we need to get it from the refresh token flow
+    // The refreshWithRefreshToken method might handle this, but let's try to get it first
+    if (!effectiveTenantId) {
+      logger.warn('No tenant ID provided for refresh, attempting to get from existing client state');
+      // Try to update tenants first if we have any token set
+      try {
+        await client.updateTenants();
+        effectiveTenantId = client.tenants?.[0]?.tenantId || '';
+      } catch (updateError) {
+        logger.warn('Failed to update tenants before refresh', { error: updateError });
+      }
     }
     
+    if (!effectiveTenantId) {
+      throw new Error('No tenant ID available for token refresh - re-authentication may be required');
+    }
+    
+    logger.info('Refreshing access token', { tenantId: effectiveTenantId });
+    
+    // Refresh the token - need to pass tenantId, redirectUri, and scope
     await client.refreshWithRefreshToken(
-      tenantId,
+      effectiveTenantId,
       config.xero.redirectUri,
       config.xero.scopes.join(' ')
     );
@@ -127,9 +145,9 @@ export async function refreshAccessToken(refreshToken: string): Promise<XeroToke
       throw new Error('Token refresh failed - no token set returned');
     }
 
-    const updatedTenantId = client.tenants?.[0]?.tenantId || (tokenSet.tenantId || '');
+    const updatedTenantId = client.tenants?.[0]?.tenantId || effectiveTenantId;
 
-    logger.info('Successfully refreshed access token');
+    logger.info('Successfully refreshed access token', { tenantId: updatedTenantId });
 
     return {
       access_token: tokenSet.access_token || '',
@@ -139,7 +157,21 @@ export async function refreshAccessToken(refreshToken: string): Promise<XeroToke
       xero_tenant_id: updatedTenantId,
     };
   } catch (error) {
-    logger.error('Failed to refresh access token', { error });
+    const errorDetails: any = {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    };
+    
+    // Try to extract API response details if available
+    if (error instanceof Error && (error as any).response) {
+      errorDetails.response = {
+        status: (error as any).response?.status,
+        statusText: (error as any).response?.statusText,
+        data: (error as any).response?.data,
+      };
+    }
+    
+    logger.error('Failed to refresh access token', errorDetails);
     throw error;
   }
 }

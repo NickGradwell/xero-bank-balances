@@ -18,8 +18,9 @@ export class XeroService {
 
   async ensureValidToken(tokenSet: XeroTokenSet): Promise<XeroTokenSet> {
     if (isTokenExpired(tokenSet)) {
-      logger.info('Token expired, refreshing...');
-      return await refreshAccessToken(tokenSet.refresh_token);
+      logger.info('Token expired, refreshing...', { tenantId: tokenSet.xero_tenant_id });
+      // Pass tenantId to refresh function so it doesn't need to look it up
+      return await refreshAccessToken(tokenSet.refresh_token, tokenSet.xero_tenant_id);
     }
     return tokenSet;
   }
