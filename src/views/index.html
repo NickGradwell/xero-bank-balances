@@ -20,8 +20,11 @@
                     </h1>
                     <p class="text-gray-600 mt-1">View all connected bank account balances</p>
                 </div>
-                <div id="authSection">
-                    <!-- Will be populated by JavaScript -->
+                <div class="flex items-center gap-3">
+                    <button id="allTransactionsBtn" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                        <i class="fas fa-list mr-1"></i>All Transactions
+                    </button>
+                    <div id="authSection"><!-- Will be populated by JavaScript --></div>
                 </div>
             </div>
         </div>
@@ -172,6 +175,47 @@
                         <i class="fas fa-receipt text-6xl text-gray-400 mb-4"></i>
                         <h3 class="text-xl font-semibold text-gray-800 mb-2">No Transactions Found</h3>
                         <p class="text-gray-600">No transactions found for the selected period.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- All Transactions Modal -->
+        <div id="allTransactionsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                <div class="flex items-center justify-between p-6 border-b border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-800">All Transactions (recent)</h2>
+                    <button onclick="closeAllTransactionsModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+                <div class="p-4 bg-gray-50 border-b border-gray-200 text-sm text-gray-600">
+                    Showing the most recent transactions returned by Xero (first few pages). Use this to reconcile account IDs/names.
+                </div>
+                <div class="flex-1 overflow-y-auto p-6">
+                    <div id="allTransactionsLoading" class="hidden text-center py-12">
+                        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
+                        <p class="text-gray-600">Loading transactions...</p>
+                    </div>
+                    <div id="allTransactionsError" class="hidden text-center py-4 text-red-600"></div>
+                    <div id="allTransactionsContainer" class="hidden">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Name</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account ID</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="allTransactionsTable" class="bg-white divide-y divide-gray-200"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -512,10 +556,65 @@
             
             if (isAuthenticated) {
                 await loadBankAccounts();
+                const allBtn = document.getElementById('allTransactionsBtn');
+                if (allBtn) {
+                    allBtn.addEventListener('click', () => showAllTransactions());
+                }
             } else {
                 showNotAuthenticatedState();
             }
         });
+
+        // All transactions modal logic
+        async function showAllTransactions() {
+            const modal = document.getElementById('allTransactionsModal');
+            const loading = document.getElementById('allTransactionsLoading');
+            const container = document.getElementById('allTransactionsContainer');
+            const error = document.getElementById('allTransactionsError');
+            const table = document.getElementById('allTransactionsTable');
+
+            modal.classList.remove('hidden');
+            loading.classList.remove('hidden');
+            container.classList.add('hidden');
+            error.classList.add('hidden');
+            table.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/xero/transactions/all?pages=3');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.message || 'Failed to fetch all transactions');
+
+                if (data.transactions && data.transactions.length > 0) {
+                    const rows = data.transactions.map(tx => `
+                        <tr>
+                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountId || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>
+                            <td class="px-4 py-2 text-sm text-gray-700">${escapeHtml(tx.description || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm ${'amount' in tx && tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(tx.amountFormatted || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
+                        </tr>
+                    `).join('');
+                    table.innerHTML = rows;
+                    loading.classList.add('hidden');
+                    container.classList.remove('hidden');
+                } else {
+                    loading.classList.add('hidden');
+                    error.textContent = 'No transactions were returned by Xero.';
+                    error.classList.remove('hidden');
+                }
+            } catch (e) {
+                loading.classList.add('hidden');
+                error.textContent = e.message || 'Failed to load transactions.';
+                error.classList.remove('hidden');
+            }
+        }
+
+        function closeAllTransactionsModal() {
+            document.getElementById('allTransactionsModal').classList.add('hidden');
+        }
     </script>
 </body>
 </html>

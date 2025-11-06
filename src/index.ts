@@ -192,6 +192,35 @@ app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   }
 });
 
+// API endpoint to get recent bank transactions across all accounts (diagnostics)
+app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
+  try {
+    const tokenSet = req.session.xeroTokenSet;
+
+    if (!tokenSet) {
+      res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+      return;
+    }
+
+    const pages = req.query.pages ? parseInt(req.query.pages as string, 10) : 3;
+    const safePages = isNaN(pages) ? 3 : Math.min(Math.max(pages, 1), 20);
+
+    const xeroService = new XeroService(tokenSet);
+    const items = await xeroService.getAllBankTransactions(tokenSet, safePages);
+
+    // Update session with potentially refreshed token
+    const updatedTokenSet = req.session.xeroTokenSet;
+    if (updatedTokenSet && updatedTokenSet !== tokenSet) {
+      req.session.xeroTokenSet = updatedTokenSet;
+    }
+
+    res.json({ count: items.length, pages: safePages, transactions: items });
+  } catch (error) {
+    logger.error('Failed to fetch all bank transactions', { error });
+    res.status(500).json({ error: 'Failed to fetch all bank transactions' });
+  }
+});
+
 // API endpoint to get bank transactions for a specific account
 app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<void> => {
   try {

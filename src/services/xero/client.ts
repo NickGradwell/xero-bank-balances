@@ -646,5 +646,102 @@ export class XeroService {
       throw error;
     }
   }
+
+  // Fetch recent bank transactions without account filter for diagnostics/inspection
+  async getAllBankTransactions(
+    tokenSet: XeroTokenSet,
+    maxPages: number = 3
+  ): Promise<Array<{
+    transactionId: string;
+    date: string;
+    description: string;
+    reference?: string;
+    amount: number;
+    amountFormatted: string;
+    type: string;
+    status: string;
+    isReconciled: boolean;
+    bankAccountId?: string;
+    bankAccountName?: string;
+    bankAccountCode?: string;
+    currencyCode: string;
+  }>> {
+    // Ensure token is valid
+    const validTokenSet = await this.ensureValidToken(tokenSet);
+    await setTokenSet(validTokenSet);
+
+    const tenantId = validTokenSet.xero_tenant_id;
+    if (!tenantId) {
+      throw new Error('No tenant ID available');
+    }
+
+    let allTransactions: XeroBankTransaction[] = [];
+    let page = 1;
+    const pageSize = 100;
+    while (page <= Math.max(1, maxPages)) {
+      const response = await this.client.accountingApi.getBankTransactions(
+        tenantId,
+        undefined,
+        undefined,
+        'Date DESC',
+        page,
+        undefined
+      );
+      const transactions = response.body.bankTransactions || [];
+      allTransactions = allTransactions.concat(transactions);
+      logger.info(`(ALL) Page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
+      if (transactions.length < pageSize) break;
+      page++;
+    }
+
+    return allTransactions.map((tx: XeroBankTransaction) => {
+      // Calculate total amount (sum of line items) with fallback
+      let totalAmount = 0;
+      if (tx.lineItems && tx.lineItems.length > 0) {
+        totalAmount = tx.lineItems.reduce((sum, item) => {
+          const amount = item.lineAmount || 0;
+          return sum + amount;
+        }, 0);
+      } else if (tx.total) {
+        totalAmount = tx.total;
+      }
+
+      const txTypeStr = tx.type ? String(tx.type) : '';
+      const isCredit = txTypeStr === 'RECEIVE' || txTypeStr === 'RECEIVE-OVERPAYMENT' || txTypeStr === 'RECEIVE-PREPAYMENT';
+      const displayAmount = isCredit ? Math.abs(totalAmount) : -Math.abs(totalAmount);
+
+      const currencyCode = tx.currencyCode ? String(tx.currencyCode) : 'USD';
+      const formattedAmount = new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: currencyCode,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(displayAmount);
+
+      let description = tx.reference || '';
+      if (!description && tx.lineItems && tx.lineItems.length > 0) {
+        description = tx.lineItems[0].description || '';
+      }
+      if (!description) {
+        description = txTypeStr || 'Transaction';
+      }
+
+      return {
+        transactionId: tx.bankTransactionID || '',
+        date: tx.date ? new Date(tx.date).toISOString().split('T')[0] : '',
+        description,
+        reference: tx.reference,
+        amount: displayAmount,
+        amountFormatted: formattedAmount,
+        type: txTypeStr,
+        status: tx.status ? String(tx.status) : 'AUTHORISED',
+        isReconciled: tx.isReconciled || false,
+        bankAccountId: tx.bankAccount?.accountID,
+        bankAccountName: tx.bankAccount?.name,
+        bankAccountCode: tx.bankAccount?.code,
+        currencyCode,
+      };
+    });
+  }
 }
 
