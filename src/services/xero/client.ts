@@ -563,16 +563,16 @@ export class XeroService {
         }
       }
 
-      // Filter out deleted transactions - we only want active transactions
-      const activeTransactions = filteredTransactions.filter((tx: XeroBankTransaction) => {
-        const status = tx.status ? String(tx.status) : '';
-        return status !== 'DELETED' && status !== 'VOIDED';
+      // Log status distribution for visibility
+      const statusCounts = new Map<string, number>();
+      filteredTransactions.forEach((tx: XeroBankTransaction) => {
+        const status = tx.status ? String(tx.status) : '(no status)';
+        statusCounts.set(status, (statusCounts.get(status) || 0) + 1);
       });
-
-      logger.info(`Filtered out deleted/voided transactions: ${filteredTransactions.length} -> ${activeTransactions.length}`);
+      logger.info(`Transaction status distribution (filtered set): ${JSON.stringify(Array.from(statusCounts.entries()))}`);
 
       // Transform to our BankTransaction format
-      return activeTransactions.map((tx: XeroBankTransaction) => {
+      return filteredTransactions.map((tx: XeroBankTransaction) => {
         // Calculate total amount (sum of line items)
         let totalAmount = 0;
         if (tx.lineItems && tx.lineItems.length > 0) {
@@ -702,15 +702,15 @@ export class XeroService {
       page++;
     }
 
-    // Filter out deleted transactions
-    const activeTransactions = allTransactions.filter((tx: XeroBankTransaction) => {
-      const status = tx.status ? String(tx.status) : '';
-      return status !== 'DELETED' && status !== 'VOIDED';
+    // Log status distribution for visibility
+    const allStatusCounts = new Map<string, number>();
+    allTransactions.forEach((tx: XeroBankTransaction) => {
+      const status = tx.status ? String(tx.status) : '(no status)';
+      allStatusCounts.set(status, (allStatusCounts.get(status) || 0) + 1);
     });
+    logger.info(`(ALL) Transaction status distribution: ${JSON.stringify(Array.from(allStatusCounts.entries()))}`);
 
-    logger.info(`(ALL) Filtered out deleted/voided transactions: ${allTransactions.length} -> ${activeTransactions.length}`);
-
-    return activeTransactions.map((tx: XeroBankTransaction) => {
+    return allTransactions.map((tx: XeroBankTransaction) => {
       // Calculate total amount (sum of line items) with fallback
       let totalAmount = 0;
       if (tx.lineItems && tx.lineItems.length > 0) {
