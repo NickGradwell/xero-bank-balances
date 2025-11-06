@@ -580,7 +580,7 @@
             table.innerHTML = '';
 
             try {
-                const response = await fetch('/api/xero/transactions/all?pages=3');
+                const response = await fetch('/api/xero/transactions/all?pages=10');
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.message || 'Failed to fetch all transactions');
 

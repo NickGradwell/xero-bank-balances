@@ -202,8 +202,8 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
       return;
     }
 
-    const pages = req.query.pages ? parseInt(req.query.pages as string, 10) : 3;
-    const safePages = isNaN(pages) ? 3 : Math.min(Math.max(pages, 1), 20);
+    const pages = req.query.pages ? parseInt(req.query.pages as string, 10) : 10;
+    const safePages = isNaN(pages) ? 10 : Math.min(Math.max(pages, 1), 50);
 
     const xeroService = new XeroService(tokenSet);
     const items = await xeroService.getAllBankTransactions(tokenSet, safePages);

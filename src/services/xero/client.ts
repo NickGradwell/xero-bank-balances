@@ -344,13 +344,14 @@ export class XeroService {
           }
         }
 
-        // If still zero, run an unfiltered diagnostic fetch (first 3 pages) to list account IDs/names present
+        // If still zero, run an unfiltered diagnostic fetch (first 10 pages) to list account IDs/names present
         if (allTransactions.length === 0) {
           try {
             logger.info('Running unfiltered diagnostics fetch to list account IDs/names present in BankTransactions');
             const diagnosticTransactions: XeroBankTransaction[] = [];
             let diagPage = 1;
-            while (diagPage <= 3) {
+            const diagMaxPages = 10; // Fetch more pages for diagnostics
+            while (diagPage <= diagMaxPages) {
               const diagResp = await this.client.accountingApi.getBankTransactions(
                 tenantId,
                 undefined,
@@ -361,8 +362,12 @@ export class XeroService {
               );
               const txs = diagResp.body.bankTransactions || [];
               diagnosticTransactions.push(...txs);
-              logger.info(`(DIAG) Page ${diagPage}: ${txs.length} transactions`);
-              if (txs.length < pageSize) break;
+              logger.info(`(DIAG) Page ${diagPage}: ${txs.length} transactions (total so far: ${diagnosticTransactions.length})`);
+              // Continue fetching even if < pageSize - only stop if 0 transactions
+              if (txs.length === 0) {
+                logger.info(`(DIAG) Page ${diagPage} returned 0 transactions, stopping diagnostics pagination`);
+                break;
+              }
               diagPage++;
             }
             const diagIds = Array.from(new Set(diagnosticTransactions.map(t => t.bankAccount?.accountID).filter(Boolean)));
@@ -685,8 +690,10 @@ export class XeroService {
 
     let allTransactions: XeroBankTransaction[] = [];
     let page = 1;
-    const pageSize = 100;
-    while (page <= Math.max(1, maxPages)) {
+    const actualMaxPages = Math.max(1, maxPages);
+    logger.info(`(ALL) Fetching up to ${actualMaxPages} pages of transactions`);
+    
+    while (page <= actualMaxPages) {
       const response = await this.client.accountingApi.getBankTransactions(
         tenantId,
         undefined,
@@ -698,9 +705,18 @@ export class XeroService {
       const transactions = response.body.bankTransactions || [];
       allTransactions = allTransactions.concat(transactions);
       logger.info(`(ALL) Page ${page}: ${transactions.length} transactions (total so far: ${allTransactions.length})`);
-      if (transactions.length < pageSize) break;
+      
+      // Continue fetching even if we get fewer than pageSize - the API might have more pages
+      // Only stop if we get 0 transactions (definitely no more pages)
+      if (transactions.length === 0) {
+        logger.info(`(ALL) Page ${page} returned 0 transactions, stopping pagination`);
+        break;
+      }
+      
       page++;
     }
+    
+    logger.info(`(ALL) Finished pagination: fetched ${allTransactions.length} total transactions across ${page - 1} page(s)`);
 
     // Log status distribution for visibility
     const allStatusCounts = new Map<string, number>();
