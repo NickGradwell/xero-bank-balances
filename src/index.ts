@@ -157,6 +157,29 @@ app.post('/auth/logout', (req, res): void => {
   });
 });
 
+// Debug endpoint - Get current tokens (for Postman testing)
+// WARNING: This endpoint exposes sensitive tokens. Remove or secure in production!
+app.get('/api/debug/tokens', (req, res): void => {
+  const tokenSet = req.session.xeroTokenSet;
+  if (!tokenSet) {
+    res.status(401).json({ 
+      error: 'Not authenticated',
+      message: 'Please complete OAuth flow first by visiting /auth/xero'
+    });
+    return;
+  }
+  
+  res.json({
+    access_token: tokenSet.access_token,
+    xero_tenant_id: tokenSet.xero_tenant_id,
+    expires_at: tokenSet.expires_at,
+    expires_at_formatted: new Date(tokenSet.expires_at * 1000).toISOString(),
+    expires_in_seconds: Math.max(0, tokenSet.expires_at - Math.floor(Date.now() / 1000)),
+    token_type: tokenSet.token_type,
+    note: 'Copy access_token and xero_tenant_id to Postman collection variables',
+  });
+});
+
 // API endpoint to get bank accounts
 app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   try {
