@@ -455,7 +455,7 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
       accountNames,
     });
 
-    // Fetch ALL journals for October 2025 (no limit)
+    // Fetch journals for October 2025 with early stopping
     // Use a Map to deduplicate transactions by unique key
     const transactionsMap = new Map<string, any>();
     let offset = 0;
@@ -466,6 +466,9 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
     let hasMore = true;
     let consecutiveOutOfRangePages = 0;
     const maxConsecutiveOutOfRangePages = 3;
+    const maxPagesWithoutMatches = 200; // Stop after 200 pages (20,000 journals) if no matches found
+    let pagesWithoutMatches = 0;
+    let lastTransactionCount = 0;
 
     while (hasMore) {
       try {
@@ -605,6 +608,15 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
 
         if (journalsInRange > 0) {
           consecutiveOutOfRangePages = 0;
+          
+          // Check if we found new transactions
+          if (transactionsMap.size > lastTransactionCount) {
+            pagesWithoutMatches = 0; // Reset counter if we found matches
+            lastTransactionCount = transactionsMap.size;
+          } else {
+            pagesWithoutMatches++;
+          }
+          
           // Log sample account identifiers on first page for debugging
           if (offset === 0 && transactionsMap.size === 0) {
             logger.info('(OCTOBER 2025) Sample account identifiers found in journals:', {
@@ -616,7 +628,16 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
               requestedAccountNames: accountNameArray,
             });
           }
+          
           logger.info(`Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange} in date range (total unique transactions: ${transactionsMap.size})`);
+          
+          // Early stopping: If we've processed many pages without finding new matches, stop
+          // This prevents processing millions of journals when matches are sparse
+          if (pagesWithoutMatches >= maxPagesWithoutMatches && transactionsMap.size === 0) {
+            logger.warn(`Stopping pagination early: processed ${offset / 100} pages without finding any matching transactions`);
+            hasMore = false;
+            break;
+          }
         } else {
           consecutiveOutOfRangePages++;
           if (consecutiveOutOfRangePages >= maxConsecutiveOutOfRangePages) {
