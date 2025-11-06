@@ -563,8 +563,16 @@ export class XeroService {
         }
       }
 
+      // Filter out deleted transactions - we only want active transactions
+      const activeTransactions = filteredTransactions.filter((tx: XeroBankTransaction) => {
+        const status = tx.status ? String(tx.status) : '';
+        return status !== 'DELETED' && status !== 'VOIDED';
+      });
+
+      logger.info(`Filtered out deleted/voided transactions: ${filteredTransactions.length} -> ${activeTransactions.length}`);
+
       // Transform to our BankTransaction format
-      return filteredTransactions.map((tx: XeroBankTransaction) => {
+      return activeTransactions.map((tx: XeroBankTransaction) => {
         // Calculate total amount (sum of line items)
         let totalAmount = 0;
         if (tx.lineItems && tx.lineItems.length > 0) {
@@ -694,7 +702,15 @@ export class XeroService {
       page++;
     }
 
-    return allTransactions.map((tx: XeroBankTransaction) => {
+    // Filter out deleted transactions
+    const activeTransactions = allTransactions.filter((tx: XeroBankTransaction) => {
+      const status = tx.status ? String(tx.status) : '';
+      return status !== 'DELETED' && status !== 'VOIDED';
+    });
+
+    logger.info(`(ALL) Filtered out deleted/voided transactions: ${allTransactions.length} -> ${activeTransactions.length}`);
+
+    return activeTransactions.map((tx: XeroBankTransaction) => {
       // Calculate total amount (sum of line items) with fallback
       let totalAmount = 0;
       if (tx.lineItems && tx.lineItems.length > 0) {
