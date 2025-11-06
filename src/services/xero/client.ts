@@ -1006,14 +1006,15 @@ export class XeroService {
 
         for (const line of journal.journalLines) {
           // Collect account identifiers for debugging
-          if (line.accountID) accountIdsInJournals.add(line.accountID);
-          if (line.accountCode) accountCodesInJournals.add(line.accountCode);
-          if (line.accountName) accountNamesInJournals.add(line.accountName.toLowerCase().trim());
-          
-          // Match by account ID, name, or code
           const lineAccountId = line.accountID || '';
           const lineAccountCode = line.accountCode || '';
           const lineAccountName = (line.accountName || '').toLowerCase().trim();
+          
+          if (lineAccountId) accountIdsInJournals.add(lineAccountId);
+          if (lineAccountCode) accountCodesInJournals.add(lineAccountCode);
+          if (lineAccountName) accountNamesInJournals.add(lineAccountName);
+          
+          // Match by account ID, name, or code
           const requestedAccountNameLower = (accountName || '').toLowerCase().trim();
 
           // Try exact match first
@@ -1028,6 +1029,19 @@ export class XeroService {
             matchesAccount = 
               lineAccountName.includes(requestedAccountNameLower) ||
               requestedAccountNameLower.includes(lineAccountName);
+          }
+          
+          // Log first few matches/non-matches for debugging
+          if (allJournals.indexOf(journal) < 3 && journal.journalLines.indexOf(line) < 2) {
+            logger.info(`(JOURNALS) Sample line matching:`, {
+              lineAccountId,
+              lineAccountCode,
+              lineAccountName,
+              requestedAccountId: accountId,
+              requestedAccountCode: accountCode,
+              requestedAccountName: requestedAccountNameLower,
+              matchesAccount,
+            });
           }
 
           if (matchesAccount) {
