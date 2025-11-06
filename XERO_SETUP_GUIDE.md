@@ -74,6 +74,7 @@ The scopes are already configured in your application (`src/config/index.ts`):
 - ✅ **accounting.transactions.read** - Read accounting transactions
 - ✅ **accounting.settings.read** - Read accounting settings
 - ✅ **accounting.reports.read** - Read accounting reports (required for bank balances)
+- ✅ **accounting.journals.read** - Read accounting journals (required for Journals endpoint)
 - ✅ **offline_access** - Access data when user is offline (required for refresh tokens)
 
 **You don't need to do anything here** - the application will automatically request these scopes when you click "Connect to Xero". The user will see these permissions when they authorize your app.

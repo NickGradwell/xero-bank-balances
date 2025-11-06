@@ -26,6 +26,7 @@ export const config: Config = {
           'accounting.transactions.read',
           'accounting.settings.read',
           'accounting.reports.read',
+          'accounting.journals.read', // Required for Journals endpoint
           'offline_access',
         ],
   },
