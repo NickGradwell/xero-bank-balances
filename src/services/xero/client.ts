@@ -1259,9 +1259,10 @@ export class XeroService {
       logger.info('(PAYMENTS) Fetching payments', { accountId, accountName, accountCode, fromDate, toDate });
 
       // Fetch all payments with pagination
+      // Limit to first 10 pages (1000 payments) to avoid rate limits and reduce processing time
       let allPayments: Payment[] = [];
       let page = 1;
-      const maxPages = 50;
+      const maxPages = 10; // Reduced from 50 to avoid rate limits
       let hasMore = true;
 
       while (hasMore && page <= maxPages) {
@@ -1283,9 +1284,9 @@ export class XeroService {
             hasMore = false;
           } else {
             page++;
-            // Rate limiting: 1.1 seconds between requests
+            // Rate limiting: 2 seconds between requests to stay well under 60/minute limit
             if (hasMore && page <= maxPages) {
-              await new Promise(resolve => setTimeout(resolve, 1100));
+              await new Promise(resolve => setTimeout(resolve, 2000));
             }
           }
         } catch (err) {
@@ -1322,6 +1323,24 @@ export class XeroService {
       const matchingPayments: BankTransaction[] = [];
       const requestedAccountNameLower = (accountName || '').toLowerCase().trim();
 
+      // Debug: log sample payment structure
+      if (allPayments.length > 0) {
+        const samplePayment = allPayments[0];
+        logger.info(`(PAYMENTS) Sample payment structure:`, {
+          paymentID: samplePayment.paymentID,
+          date: samplePayment.date,
+          amount: samplePayment.amount,
+          accountType: typeof samplePayment.account,
+          accountValue: samplePayment.account,
+          accountKeys: samplePayment.account ? Object.keys(samplePayment.account as any) : [],
+        });
+      }
+
+      // Collect unique account identifiers from payments for debugging
+      const accountIdsInPayments = new Set<string>();
+      const accountNamesInPayments = new Set<string>();
+      const accountCodesInPayments = new Set<string>();
+
       for (const payment of allPayments) {
         // Check if payment date is in range
         if (!payment.date) continue;
@@ -1333,6 +1352,11 @@ export class XeroService {
         const paymentAccountId = (payment.account as any)?.accountID;
         const paymentAccountName = (payment.account as any)?.name || '';
         const paymentAccountCode = (payment.account as any)?.code || '';
+
+        // Collect for debugging
+        if (paymentAccountId) accountIdsInPayments.add(paymentAccountId);
+        if (paymentAccountName) accountNamesInPayments.add(paymentAccountName.toLowerCase().trim());
+        if (paymentAccountCode) accountCodesInPayments.add(paymentAccountCode);
 
         let matchesAccount =
           (accountId && paymentAccountId === accountId) ||
@@ -1373,6 +1397,13 @@ export class XeroService {
         }
       }
 
+      // Log debugging information
+      logger.info(`(PAYMENTS) Debug - Requested Account: ID="${accountId}", Name="${accountName}", Code="${accountCode}"`);
+      logger.info(`(PAYMENTS) Debug - Found ${accountIdsInPayments.size} unique account IDs, ${accountNamesInPayments.size} unique names, ${accountCodesInPayments.size} unique codes in payments`);
+      logger.info(`(PAYMENTS) Debug - First 10 Account IDs in payments: ${Array.from(accountIdsInPayments).slice(0, 10).join(', ')}`);
+      logger.info(`(PAYMENTS) Debug - First 10 Account Names in payments: ${Array.from(accountNamesInPayments).slice(0, 10).map(n => `"${n}"`).join(', ')}`);
+      logger.info(`(PAYMENTS) Debug - Account ID "${accountId}" in payments: ${accountIdsInPayments.has(accountId)}`);
+      logger.info(`(PAYMENTS) Debug - Account Name "${requestedAccountNameLower}" in payments: ${accountNamesInPayments.has(requestedAccountNameLower)}`);
       logger.info(`(PAYMENTS) Found ${matchingPayments.length} matching payments for account ${accountName}`);
 
       return matchingPayments;
