@@ -215,7 +215,7 @@ app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   }
 });
 
-// API endpoint to get recent bank transactions across all accounts (diagnostics)
+// API endpoint to get all transactions for "The Forest" account (using Journals)
 app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
   try {
     const tokenSet = req.session.xeroTokenSet;
@@ -225,11 +225,52 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
       return;
     }
 
-    const pages = req.query.pages ? parseInt(req.query.pages as string, 10) : 10;
-    const safePages = isNaN(pages) ? 10 : Math.min(Math.max(pages, 1), 50);
+    // Get current month/year or use query params
+    const month = req.query.month ? parseInt(req.query.month as string, 10) : new Date().getMonth() + 1;
+    const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
+
+    // Validate month and year
+    if (month < 1 || month > 12) {
+      res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
+      return;
+    }
+
+    if (year < 2000 || year > 2100) {
+      res.status(400).json({ error: 'Invalid year.' });
+      return;
+    }
+
+    // Calculate date range for the selected month
+    const fromDate = new Date(year, month - 1, 1);
+    const toDate = new Date(year, month, 0); // Last day of the month
+
+    // Format dates as YYYY-MM-DD
+    const formatDate = (date: Date): string => {
+      return date.toISOString().split('T')[0];
+    };
 
     const xeroService = new XeroService(tokenSet);
-    const items = await xeroService.getAllBankTransactions(tokenSet, safePages);
+    
+    // First, get bank accounts to find "The Forest" account
+    const bankAccounts = await xeroService.getBankAccounts(tokenSet);
+    const forestAccount = bankAccounts.find(acc => 
+      acc.name.toLowerCase().includes('forest')
+    );
+
+    if (!forestAccount) {
+      res.status(404).json({ error: 'Could not find "The Forest" account' });
+      return;
+    }
+
+    // Get transactions for "The Forest" account using Journals endpoint
+    const transactions = await xeroService.getAccountTransactionsFromJournals(
+      tokenSet,
+      forestAccount.accountId,
+      forestAccount.name,
+      forestAccount.code,
+      formatDate(fromDate),
+      formatDate(toDate)
+    );
 
     // Update session with potentially refreshed token
     const updatedTokenSet = req.session.xeroTokenSet;
@@ -237,10 +278,20 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
       req.session.xeroTokenSet = updatedTokenSet;
     }
 
-    res.json({ count: items.length, pages: safePages, transactions: items });
+    res.json({ 
+      count: transactions.length, 
+      month: month,
+      year: year,
+      account: {
+        id: forestAccount.accountId,
+        name: forestAccount.name,
+        code: forestAccount.code,
+      },
+      transactions: transactions 
+    });
   } catch (error) {
-    logger.error('Failed to fetch all bank transactions', { error });
-    res.status(500).json({ error: 'Failed to fetch all bank transactions' });
+    logger.error('Failed to fetch all transactions', { error });
+    res.status(500).json({ error: 'Failed to fetch all transactions' });
   }
 });
 
@@ -284,7 +335,8 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
     };
 
     const xeroService = new XeroService(tokenSet);
-    const transactions = await xeroService.getBankTransactions(
+    // Use Journals endpoint instead of BankTransactions for more comprehensive data
+    const transactions = await xeroService.getAccountTransactionsFromJournals(
       tokenSet,
       accountId,
       accountName || '',

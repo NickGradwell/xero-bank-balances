@@ -1,4 +1,4 @@
-import { XeroClient, Account, AccountType, BankTransaction as XeroBankTransaction } from 'xero-node';
+import { XeroClient, Account, AccountType, BankTransaction as XeroBankTransaction, Journal } from 'xero-node';
 import { logger } from '../../utils/logger';
 import { BankAccount, BankTransaction } from '../../types/xero';
 import { getXeroClient, setTokenSet, isTokenExpired, refreshAccessToken } from './auth';
@@ -804,6 +804,167 @@ export class XeroService {
         currencyCode,
       };
     });
+  }
+
+  // Get account transactions using Journals endpoint (more comprehensive than BankTransactions)
+  async getAccountTransactionsFromJournals(
+    tokenSet: XeroTokenSet,
+    accountId: string,
+    accountName: string,
+    accountCode: string,
+    fromDate: string,
+    toDate: string
+  ): Promise<BankTransaction[]> {
+    try {
+      // Ensure token is valid
+      const validTokenSet = await this.ensureValidToken(tokenSet);
+      await setTokenSet(validTokenSet);
+
+      const tenantId = validTokenSet.xero_tenant_id;
+      if (!tenantId) {
+        throw new Error('No tenant ID available');
+      }
+
+      // Convert date strings to Date objects
+      const fromDateObj = new Date(fromDate);
+      fromDateObj.setHours(0, 0, 0, 0);
+      const toDateObj = new Date(toDate);
+      toDateObj.setHours(23, 59, 59, 999);
+
+      logger.info('Fetching account transactions from Journals', {
+        accountId,
+        accountName,
+        accountCode,
+        fromDate,
+        toDate,
+      });
+
+      // Fetch all journals with pagination
+      let allJournals: Journal[] = [];
+      let offset = 0;
+      const pageSize = 100;
+      const maxPages = 100; // Safety limit (10,000 journals max)
+      let hasMore = true;
+
+      while (hasMore && offset < maxPages * pageSize) {
+        try {
+          const response = await this.client.accountingApi.getJournals(
+            tenantId,
+            undefined, // ifModifiedSince
+            offset, // offset for pagination
+            undefined // where clause (not supported for journals)
+          );
+
+          const journals = response.body.journals || [];
+          allJournals = allJournals.concat(journals);
+
+          logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals (total so far: ${allJournals.length})`);
+
+          // If we got fewer than pageSize, we've reached the end
+          if (journals.length < pageSize) {
+            hasMore = false;
+            logger.info(`(JOURNALS) Pagination complete: received ${journals.length} journals (less than page size ${pageSize})`);
+          } else {
+            offset += pageSize;
+          }
+        } catch (err) {
+          logger.error(`(JOURNALS) Error fetching journals at offset ${offset}`, { error: err });
+          hasMore = false;
+        }
+      }
+
+      logger.info(`(JOURNALS) Finished pagination: fetched ${allJournals.length} total journals`);
+
+      // Filter journals by account and date range
+      const matchingTransactions: BankTransaction[] = [];
+
+      for (const journal of allJournals) {
+        // Check if journal date is within range
+        if (!journal.journalDate) continue;
+        const journalDate = new Date(journal.journalDate);
+        if (journalDate < fromDateObj || journalDate > toDateObj) {
+          continue;
+        }
+
+        // Check journal lines for matching account
+        if (!journal.journalLines || journal.journalLines.length === 0) continue;
+
+        for (const line of journal.journalLines) {
+          // Match by account ID, name, or code
+          const lineAccountId = line.accountID || '';
+          const lineAccountCode = line.accountCode || '';
+          const lineAccountName = line.accountName || '';
+
+          const matchesAccount =
+            (accountId && lineAccountId === accountId) ||
+            (accountCode && lineAccountCode === accountCode) ||
+            (accountName && lineAccountName.toLowerCase().trim() === accountName.toLowerCase().trim());
+
+          if (matchesAccount) {
+            // Calculate amount - use netAmount or grossAmount
+            const amount = line.netAmount || line.grossAmount || 0;
+
+            // Format amount - default to GBP (can be enhanced to get from account if needed)
+            const currencyCode = 'GBP';
+            const formattedAmount = new Intl.NumberFormat('en-GB', {
+              style: 'currency',
+              currency: currencyCode,
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            }).format(amount);
+
+            // Get description from journal or line
+            let description = journal.reference || journal.sourceID || '';
+            if (!description && line.description) {
+              description = line.description;
+            }
+            if (!description) {
+              description = journal.journalNumber?.toString() || 'Journal Entry';
+            }
+
+            matchingTransactions.push({
+              transactionId: journal.journalID || `journal-${journal.journalNumber}`,
+              date: journal.journalDate ? new Date(journal.journalDate).toISOString().split('T')[0] : '',
+              description,
+              reference: journal.reference || journal.sourceID,
+              amount: amount,
+              amountFormatted: formattedAmount,
+              type: amount >= 0 ? 'DEBIT' : 'CREDIT',
+              status: journal.createdDateUTC ? 'AUTHORISED' : 'DRAFT',
+              contactName: journal.sourceType ? String(journal.sourceType) : undefined,
+              isReconciled: false, // Journals don't have reconciliation status
+            });
+          }
+        }
+      }
+
+      // Sort by date descending
+      matchingTransactions.sort((a, b) => {
+        const dateA = new Date(a.date).getTime();
+        const dateB = new Date(b.date).getTime();
+        return dateB - dateA;
+      });
+
+      logger.info(`(JOURNALS) Found ${matchingTransactions.length} transactions for account ${accountName} (${accountId})`);
+
+      return matchingTransactions;
+    } catch (error) {
+      const errorDetails: any = {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      };
+
+      if (error instanceof Error && (error as any).response) {
+        errorDetails.response = {
+          status: (error as any).response?.status,
+          statusText: (error as any).response?.statusText,
+          data: (error as any).response?.data,
+        };
+      }
+
+      logger.error('Failed to fetch account transactions from journals', errorDetails);
+      throw error;
+    }
   }
 }
 
