@@ -282,6 +282,23 @@
                                 </tbody>
                             </table>
                         </div>
+                        <!-- Pagination Controls -->
+                        <div class="mt-4 flex items-center justify-between border-t border-gray-200 pt-4">
+                            <div class="flex items-center gap-2">
+                                <button id="october2025PrevBtn" onclick="changeOctober2025Page(-1)" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                                    <i class="fas fa-chevron-left mr-1"></i>Previous
+                                </button>
+                                <span id="october2025PageInfo" class="text-sm text-gray-700 px-4">
+                                    Page <span id="october2025CurrentPage">1</span> of <span id="october2025TotalPages">1</span>
+                                </span>
+                                <button id="october2025NextBtn" onclick="changeOctober2025Page(1)" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                                    Next<i class="fas fa-chevron-right ml-1"></i>
+                                </button>
+                            </div>
+                            <div class="text-sm text-gray-600">
+                                Showing <span id="october2025ShowingFrom">1</span>-<span id="october2025ShowingTo">0</span> of <span id="october2025TotalTransactions">0</span> transactions
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -798,6 +815,8 @@
         // October 2025 Transactions modal logic
         let october2025Transactions = [];
         let october2025Accounts = [];
+        let october2025CurrentPage = 1;
+        const october2025PageSize = 100;
 
         async function showOctober2025Transactions() {
             const modal = document.getElementById('october2025Modal');
@@ -876,6 +895,7 @@
             modal.classList.add('hidden');
             october2025Transactions = [];
             october2025Accounts = [];
+            october2025CurrentPage = 1;
         }
 
         function selectPropertiesOnly() {
@@ -898,6 +918,12 @@
         }
 
         function filterOctober2025Transactions() {
+            // Reset to page 1 when filtering changes
+            october2025CurrentPage = 1;
+            displayOctober2025Page();
+        }
+
+        function getFilteredTransactions() {
             const checkboxes = document.querySelectorAll('.october2025AccountCheckbox:checked');
             const selectedAccountIds = new Set();
             const selectedAccountNames = new Set();
@@ -928,26 +954,68 @@
                 });
             }
 
-            // Limit to 500 transactions
-            filteredTransactions = filteredTransactions.slice(0, 500);
+            return filteredTransactions;
+        }
+
+        function displayOctober2025Page() {
+            const filteredTransactions = getFilteredTransactions();
+            const totalTransactions = filteredTransactions.length;
+            const totalPages = Math.max(1, Math.ceil(totalTransactions / october2025PageSize));
+            
+            // Ensure current page is valid
+            if (october2025CurrentPage > totalPages) {
+                october2025CurrentPage = totalPages;
+            }
+            if (october2025CurrentPage < 1) {
+                october2025CurrentPage = 1;
+            }
+
+            // Get transactions for current page
+            const startIndex = (october2025CurrentPage - 1) * october2025PageSize;
+            const endIndex = startIndex + october2025PageSize;
+            const pageTransactions = filteredTransactions.slice(startIndex, endIndex);
 
             // Update filter count
+            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox:checked');
             const filterCount = document.getElementById('october2025FilterCount');
             if (filterCount) {
                 filterCount.textContent = `${checkboxes.length} account${checkboxes.length !== 1 ? 's' : ''} selected`;
             }
 
-            // Update transaction count
+            // Update transaction count (total filtered)
             const transactionCount = document.getElementById('october2025TransactionCount');
             if (transactionCount) {
-                transactionCount.textContent = `${filteredTransactions.length} transaction${filteredTransactions.length !== 1 ? 's' : ''}`;
+                transactionCount.textContent = `${totalTransactions} transaction${totalTransactions !== 1 ? 's' : ''}`;
             }
 
-            // Display filtered transactions
+            // Update pagination info
+            const currentPageEl = document.getElementById('october2025CurrentPage');
+            const totalPagesEl = document.getElementById('october2025TotalPages');
+            const showingFromEl = document.getElementById('october2025ShowingFrom');
+            const showingToEl = document.getElementById('october2025ShowingTo');
+            const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
+            
+            if (currentPageEl) currentPageEl.textContent = october2025CurrentPage;
+            if (totalPagesEl) totalPagesEl.textContent = totalPages;
+            if (showingFromEl) showingFromEl.textContent = totalTransactions > 0 ? startIndex + 1 : 0;
+            if (showingToEl) showingToEl.textContent = Math.min(endIndex, totalTransactions);
+            if (totalTransactionsEl) totalTransactionsEl.textContent = totalTransactions;
+
+            // Update pagination buttons
+            const prevBtn = document.getElementById('october2025PrevBtn');
+            const nextBtn = document.getElementById('october2025NextBtn');
+            if (prevBtn) {
+                prevBtn.disabled = october2025CurrentPage <= 1;
+            }
+            if (nextBtn) {
+                nextBtn.disabled = october2025CurrentPage >= totalPages;
+            }
+
+            // Display transactions for current page
             const table = document.getElementById('october2025Table');
             if (table) {
-                if (filteredTransactions.length > 0) {
-                    const rows = filteredTransactions.map(tx => `
+                if (pageTransactions.length > 0) {
+                    const rows = pageTransactions.map(tx => `
                         <tr class="hover:bg-gray-50">
                             <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
                             <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.journalNumber?.toString() || '')}</td>
@@ -963,6 +1031,17 @@
                 } else {
                     table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">No transactions match the selected filters</td></tr>';
                 }
+            }
+        }
+
+        function changeOctober2025Page(delta) {
+            const filteredTransactions = getFilteredTransactions();
+            const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / october2025PageSize));
+            
+            const newPage = october2025CurrentPage + delta;
+            if (newPage >= 1 && newPage <= totalPages) {
+                october2025CurrentPage = newPage;
+                displayOctober2025Page();
             }
         }
     </script>
