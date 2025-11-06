@@ -664,6 +664,65 @@
         function closeAllTransactionsModal() {
             document.getElementById('allTransactionsModal').classList.add('hidden');
         }
+
+        // 100 Transactions modal logic
+        async function showHundredTransactions() {
+            const modal = document.getElementById('hundredTransactionsModal');
+            const loading = document.getElementById('hundredTransactionsLoading');
+            const container = document.getElementById('hundredTransactionsContainer');
+            const error = document.getElementById('hundredTransactionsError');
+            const table = document.getElementById('hundredTransactionsTable');
+
+            if (!modal || !loading || !container || !error || !table) {
+                console.error('Missing modal elements');
+                return;
+            }
+
+            modal.classList.remove('hidden');
+            loading.classList.remove('hidden');
+            container.classList.add('hidden');
+            error.classList.add('hidden');
+            table.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/xero/transactions/100');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.message || 'Failed to fetch 100 transactions');
+
+                if (data.transactions && data.transactions.length > 0) {
+                    const rows = data.transactions.map(tx => `
+                        <tr>
+                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">${escapeHtml(tx.bankAccountId || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>
+                            <td class="px-4 py-2 text-sm text-gray-700">${escapeHtml(tx.description || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm ${'amount' in tx && tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(tx.amountFormatted || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
+                        </tr>
+                    `).join('');
+                    table.innerHTML = rows;
+                    loading.classList.add('hidden');
+                    container.classList.remove('hidden');
+                } else {
+                    loading.classList.add('hidden');
+                    error.textContent = 'No transactions were returned by Xero.';
+                    error.classList.remove('hidden');
+                }
+            } catch (e) {
+                loading.classList.add('hidden');
+                error.textContent = e instanceof Error ? e.message : 'Failed to load transactions.';
+                error.classList.remove('hidden');
+            }
+        }
+
+        function closeHundredTransactionsModal() {
+            const modal = document.getElementById('hundredTransactionsModal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+        }
     </script>
 </body>
 </html>
