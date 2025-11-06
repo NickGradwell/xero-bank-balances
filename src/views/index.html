@@ -193,7 +193,7 @@
                     </button>
                 </div>
                 <div class="p-4 bg-gray-50 border-b border-gray-200 text-sm text-gray-600">
-                    Showing the first 100 transactions from BankTransactions endpoint (unfiltered). Use this to see what transactions are available.
+                    Showing the first 100 journal entries from Journals endpoint (unfiltered). Each journal may have multiple lines. Use this to see what account IDs/names/codes are present in journals.
                 </div>
                 <div class="flex-1 overflow-y-auto p-6">
                     <div id="hundredTransactionsLoading" class="hidden text-center py-12">
@@ -207,6 +207,7 @@
                                 <thead class="bg-gray-50">
                                     <tr>
                                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Journal #</th>
                                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Name</th>
                                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account ID</th>
                                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Code</th>
@@ -693,6 +694,7 @@
                     const rows = data.transactions.map(tx => `
                         <tr>
                             <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
+                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.journalNumber?.toString() || '')}</td>
                             <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
                             <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">${escapeHtml(tx.bankAccountId || '')}</td>
                             <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>

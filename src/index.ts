@@ -295,7 +295,7 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
   }
 });
 
-// API endpoint to get 100 transactions (unfiltered, any account)
+// API endpoint to get 100 journal entries (unfiltered, any account)
 app.get('/api/xero/transactions/100', async (req, res): Promise<void> => {
   try {
     const tokenSet = req.session.xeroTokenSet;
@@ -312,68 +312,84 @@ app.get('/api/xero/transactions/100', async (req, res): Promise<void> => {
       return;
     }
 
-    // Fetch first 100 BankTransactions (unfiltered)
+    // Fetch first 100 Journals (unfiltered)
     const validTokenSet = await xeroService.ensureValidToken(tokenSet);
     await setTokenSet(validTokenSet);
 
-    // Access the client through a helper method or use getXeroClient directly
     const client = getXeroClient();
-    const response = await client.accountingApi.getBankTransactions(
+    const response = await client.accountingApi.getJournals(
       tenantId,
-      undefined, // ifModifiedSince
-      undefined, // where - no filter
-      'Date DESC', // order by date descending
-      1 // page 1
+      undefined, // ifModifiedSince - no filter
+      0, // offset - start at 0
+      false // paymentsOnly - false = get all journals
     );
 
-    const transactions = response.body.bankTransactions || [];
-    const limitedTransactions = transactions.slice(0, 100); // Limit to 100
+    const journals = response.body.journals || [];
+    const limitedJournals = journals.slice(0, 100); // Limit to 100 journals
 
-    // Transform to our format
-    const formattedTransactions = limitedTransactions.map((tx: any) => {
-      let totalAmount = 0;
-      if (tx.lineItems && tx.lineItems.length > 0) {
-        totalAmount = tx.lineItems.reduce((sum: number, item: any) => {
-          return sum + (item.lineAmount || 0);
-        }, 0);
-      } else if (tx.total) {
-        totalAmount = tx.total;
+    // Transform journals to our format - show journal lines with account info
+    const formattedTransactions: any[] = [];
+    
+    for (const journal of limitedJournals) {
+      if (!journal.journalLines || journal.journalLines.length === 0) continue;
+      
+      // Each journal line represents a transaction entry
+      for (const line of journal.journalLines) {
+        const amount = line.netAmount || line.grossAmount || 0;
+        const currencyCode = 'GBP'; // Default, or extract from journal if available
+        
+        const formattedAmount = new Intl.NumberFormat('en-GB', {
+          style: 'currency',
+          currency: currencyCode,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(amount);
+
+        let description = journal.reference || journal.sourceID || '';
+        if (!description && line.description) {
+          description = line.description;
+        }
+        if (!description) {
+          description = journal.journalNumber?.toString() || 'Journal Entry';
+        }
+
+        formattedTransactions.push({
+          transactionId: journal.journalID || `journal-${journal.journalNumber}`,
+          date: journal.journalDate ? new Date(journal.journalDate).toISOString().split('T')[0] : '',
+          description: description,
+          reference: journal.reference || journal.sourceID,
+          amount: amount,
+          amountFormatted: formattedAmount,
+          type: amount >= 0 ? 'DEBIT' : 'CREDIT',
+          status: journal.createdDateUTC ? 'AUTHORISED' : 'DRAFT',
+          bankAccountId: line.accountID || '',
+          bankAccountName: line.accountName || '',
+          bankAccountCode: line.accountCode || '',
+          journalNumber: journal.journalNumber,
+          journalID: journal.journalID,
+        });
+
+        // Stop if we've collected 100 entries
+        if (formattedTransactions.length >= 100) break;
       }
+      
+      // Stop if we've collected 100 entries
+      if (formattedTransactions.length >= 100) break;
+    }
 
-      const txTypeStr = tx.type ? String(tx.type) : '';
-      const isCredit = txTypeStr === 'RECEIVE' || txTypeStr === 'RECEIVE-OVERPAYMENT' || txTypeStr === 'RECEIVE-PREPAYMENT';
-      const displayAmount = isCredit ? Math.abs(totalAmount) : -Math.abs(totalAmount);
+    // Limit to 100 total entries (across all journal lines)
+    const finalTransactions = formattedTransactions.slice(0, 100);
 
-      const currencyCode = tx.currencyCode ? String(tx.currencyCode) : 'GBP';
-      const formattedAmount = new Intl.NumberFormat('en-GB', {
-        style: 'currency',
-        currency: currencyCode,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(displayAmount);
-
-      return {
-        transactionId: tx.bankTransactionID || '',
-        date: tx.date ? new Date(tx.date).toISOString().split('T')[0] : '',
-        description: tx.reference || tx.lineItems?.[0]?.description || '',
-        reference: tx.reference,
-        amount: displayAmount,
-        amountFormatted: formattedAmount,
-        type: txTypeStr,
-        status: tx.status ? String(tx.status) : 'AUTHORISED',
-        bankAccountId: tx.bankAccount?.accountID || '',
-        bankAccountName: tx.bankAccount?.name || '',
-        bankAccountCode: tx.bankAccount?.code || '',
-      };
-    });
+    logger.info(`Fetched ${finalTransactions.length} journal entries from ${limitedJournals.length} journals`);
 
     res.json({
-      count: formattedTransactions.length,
-      transactions: formattedTransactions,
+      count: finalTransactions.length,
+      transactions: finalTransactions,
+      note: 'Showing journal entries (each journal may have multiple lines)',
     });
   } catch (error) {
-    logger.error('Failed to fetch 100 transactions', { error });
-    res.status(500).json({ error: 'Failed to fetch 100 transactions' });
+    logger.error('Failed to fetch 100 journal entries', { error });
+    res.status(500).json({ error: 'Failed to fetch 100 journal entries' });
   }
 });
 
