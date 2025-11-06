@@ -848,11 +848,12 @@ export class XeroService {
 
       while (hasMore && offset < maxPages * pageSize) {
         try {
+          logger.info(`(JOURNALS) Attempting to fetch journals at offset ${offset}`);
           const response = await this.client.accountingApi.getJournals(
             tenantId,
-            undefined, // ifModifiedSince
+            undefined, // ifModifiedSince (optional Date)
             offset, // offset for pagination
-            undefined // where clause (not supported for journals)
+            false // paymentsOnly (false = get all journals, not just payment journals)
           );
 
           const journals = response.body.journals || [];
