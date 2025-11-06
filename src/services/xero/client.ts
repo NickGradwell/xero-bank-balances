@@ -287,6 +287,92 @@ export class XeroService {
       } else if (where) {
         // If where clause was used and we got 0 transactions, log this info
         logger.info(`Where clause returned 0 transactions - this could mean no transactions exist for account ${accountId} or all are outside date range`);
+        // Try alternate where clause syntaxes to account for API quirks
+        const alternateWhereClauses: string[] = [
+          `BankAccount.AccountID==Guid("${accountId}")`,
+          `BankAccount.AccountID=="${accountId}"`,
+          `BankAccount.AccountID="${accountId}"`,
+          `AccountID==Guid("${accountId}")`,
+          `AccountID=="${accountId}"`,
+          `BankAccountID==Guid("${accountId}")`,
+          `BankAccountID=="${accountId}"`,
+        ];
+
+        for (const altWhere of alternateWhereClauses) {
+          try {
+            logger.info(`Attempting alternate where clause: ${altWhere}`);
+            const testResponse = await this.client.accountingApi.getBankTransactions(
+              tenantId,
+              undefined,
+              altWhere,
+              'Date DESC',
+              1,
+              undefined
+            );
+            const testTx = testResponse.body.bankTransactions || [];
+            logger.info(`Alternate where result: ${testTx.length} transactions`);
+            if (testTx.length > 0) {
+              // Use this alternate where for the full pagination
+              where = altWhere;
+              allTransactions = [];
+              page = 1;
+              hasMore = true;
+              logger.info(`Using alternate where clause for pagination: ${where}`);
+              while (hasMore && page <= maxPages) {
+                const resp = await this.client.accountingApi.getBankTransactions(
+                  tenantId,
+                  undefined,
+                  where,
+                  'Date DESC',
+                  page,
+                  undefined
+                );
+                const txs = resp.body.bankTransactions || [];
+                allTransactions = allTransactions.concat(txs);
+                logger.info(`(ALT) Fetched page ${page}: ${txs.length} transactions (total so far: ${allTransactions.length})`);
+                if (txs.length < pageSize) {
+                  hasMore = false;
+                } else {
+                  page++;
+                }
+              }
+              logger.info(`(ALT) Pagination finished: fetched ${allTransactions.length} total transactions across ${page - 1} page(s)`);
+              break;
+            }
+          } catch (altErr) {
+            logger.warn(`Alternate where clause failed: ${altWhere}`, { error: altErr });
+          }
+        }
+
+        // If still zero, run an unfiltered diagnostic fetch (first 3 pages) to list account IDs/names present
+        if (allTransactions.length === 0) {
+          try {
+            logger.info('Running unfiltered diagnostics fetch to list account IDs/names present in BankTransactions');
+            const diagnosticTransactions: XeroBankTransaction[] = [];
+            let diagPage = 1;
+            while (diagPage <= 3) {
+              const diagResp = await this.client.accountingApi.getBankTransactions(
+                tenantId,
+                undefined,
+                undefined,
+                'Date DESC',
+                diagPage,
+                undefined
+              );
+              const txs = diagResp.body.bankTransactions || [];
+              diagnosticTransactions.push(...txs);
+              logger.info(`(DIAG) Page ${diagPage}: ${txs.length} transactions`);
+              if (txs.length < pageSize) break;
+              diagPage++;
+            }
+            const diagIds = Array.from(new Set(diagnosticTransactions.map(t => t.bankAccount?.accountID).filter(Boolean)));
+            const diagNames = Array.from(new Set(diagnosticTransactions.map(t => t.bankAccount?.name).filter(Boolean)));
+            logger.info(`(DIAG) Unique account IDs in unfiltered transactions: ${JSON.stringify(diagIds)}`);
+            logger.info(`(DIAG) Unique account names in unfiltered transactions: ${JSON.stringify(diagNames)}`);
+          } catch (diagErr) {
+            logger.warn('Unfiltered diagnostics fetch failed', { error: diagErr });
+          }
+        }
       }
 
       // Filter transactions by account ID, name, code, and date range (client-side filtering)
