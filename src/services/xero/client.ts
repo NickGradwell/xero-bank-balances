@@ -858,8 +858,10 @@ export class XeroService {
       // Stop fetching if we've found enough transactions in the date range
       let consecutiveOutOfRangePages = 0;
       const maxConsecutiveOutOfRangePages = 3; // Stop after 3 consecutive pages with no matching dates
+      const maxJournalsInRange = 1000; // Hard limit: stop after fetching 1000 journals in date range
+      let journalsBeforeDateRange = 0; // Track journals before the date range to detect when we've gone too far back
 
-      while (hasMore && offset < maxPages * pageSize) {
+      while (hasMore && offset < maxPages * pageSize && allJournals.length < maxJournalsInRange) {
         try {
           logger.info(`(JOURNALS) Attempting to fetch journals at offset ${offset} (fromDate: ${fromDate}, toDate: ${toDate})`);
           const response = await this.client.accountingApi.getJournals(
@@ -878,14 +880,42 @@ export class XeroService {
             return jDate >= fromDateObj && jDate <= toDateObj;
           });
           
+          // Check for journals before the date range (to detect when we've gone too far back)
+          const journalsBeforeRange = journals.filter(j => {
+            if (!j.journalDate) return false;
+            const jDate = new Date(j.journalDate);
+            return jDate < fromDateObj;
+          });
+          
           if (journalsInRange.length > 0) {
             // Found journals in date range, reset counter
             consecutiveOutOfRangePages = 0;
+            journalsBeforeDateRange = 0; // Reset counter when we find journals in range
             allJournals = allJournals.concat(journalsInRange); // Only add journals in date range
-            logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange.length} in date range (total in range: ${allJournals.length})`);
+            
+            // Stop if we've reached the limit
+            if (allJournals.length >= maxJournalsInRange) {
+              logger.info(`(JOURNALS) Reached limit of ${maxJournalsInRange} journals in date range, stopping pagination`);
+              hasMore = false;
+              break;
+            }
+            
+            logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange.length} in date range (total in range: ${allJournals.length}/${maxJournalsInRange})`);
           } else {
             // No journals in date range on this page
             consecutiveOutOfRangePages++;
+            
+            // If we see journals before the date range, we might have gone too far back
+            if (journalsBeforeRange.length > 0) {
+              journalsBeforeDateRange += journalsBeforeRange.length;
+              // If most journals on this page are before the date range, we've likely gone past it
+              if (journalsBeforeRange.length >= journals.length * 0.8) {
+                logger.info(`(JOURNALS) Most journals on this page are before date range, stopping pagination`);
+                hasMore = false;
+                break;
+              }
+            }
+            
             logger.info(`(JOURNALS) Fetched offset ${offset}: ${journals.length} journals, 0 in date range (consecutive out-of-range pages: ${consecutiveOutOfRangePages})`);
             
             // Stop if we've had multiple consecutive pages with no matching dates
