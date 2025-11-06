@@ -840,11 +840,16 @@ export class XeroService {
       });
 
       // Fetch all journals with pagination
+      // Xero rate limit: 60 requests per minute, so we need to throttle requests
       let allJournals: Journal[] = [];
       let offset = 0;
       const pageSize = 100;
       const maxPages = 100; // Safety limit (10,000 journals max)
       let hasMore = true;
+      
+      // Rate limiting: Xero allows 60 requests/minute, so we'll add a small delay
+      // We'll fetch in batches and add delays to stay under the limit
+      const delayBetweenRequests = 1100; // 1.1 seconds between requests (55 requests/minute to be safe)
 
       while (hasMore && offset < maxPages * pageSize) {
         try {
@@ -867,6 +872,10 @@ export class XeroService {
             logger.info(`(JOURNALS) Pagination complete: received ${journals.length} journals (less than page size ${pageSize})`);
           } else {
             offset += pageSize;
+            // Add delay to avoid rate limiting (except for the last request)
+            if (hasMore && offset < maxPages * pageSize) {
+              await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
+            }
           }
         } catch (err) {
           const errorDetails: any = {
@@ -876,11 +885,22 @@ export class XeroService {
           };
           
           if (err instanceof Error && (err as any).response) {
+            const response = (err as any).response;
             errorDetails.response = {
-              status: (err as any).response?.status,
-              statusText: (err as any).response?.statusText,
-              data: (err as any).response?.data,
+              status: response?.status,
+              statusText: response?.statusText,
+              data: response?.data,
+              headers: response?.headers,
             };
+            
+            // Handle rate limiting (429)
+            if (response?.status === 429) {
+              const retryAfter = parseInt(response?.headers?.['retry-after'] || '60', 10);
+              logger.warn(`(JOURNALS) Rate limit hit. Waiting ${retryAfter} seconds before retrying...`);
+              await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+              // Don't set hasMore = false, continue trying
+              continue;
+            }
           }
           
           logger.error(`(JOURNALS) Error fetching journals at offset ${offset}`, errorDetails);
@@ -892,6 +912,26 @@ export class XeroService {
 
       // Filter journals by account and date range
       const matchingTransactions: BankTransaction[] = [];
+      
+      // Log sample journal data for debugging
+      if (allJournals.length > 0) {
+        const sampleJournal = allJournals[0];
+        logger.info(`(JOURNALS) Sample journal structure:`, {
+          journalID: sampleJournal.journalID,
+          journalDate: sampleJournal.journalDate,
+          journalNumber: sampleJournal.journalNumber,
+          hasJournalLines: !!sampleJournal.journalLines,
+          journalLinesCount: sampleJournal.journalLines?.length || 0,
+          sampleLineAccountID: sampleJournal.journalLines?.[0]?.accountID,
+          sampleLineAccountCode: sampleJournal.journalLines?.[0]?.accountCode,
+          sampleLineAccountName: sampleJournal.journalLines?.[0]?.accountName,
+        });
+      }
+      
+      // Collect unique account IDs/names/codes from journals for debugging
+      const accountIdsInJournals = new Set<string>();
+      const accountNamesInJournals = new Set<string>();
+      const accountCodesInJournals = new Set<string>();
 
       for (const journal of allJournals) {
         // Check if journal date is within range
@@ -905,15 +945,20 @@ export class XeroService {
         if (!journal.journalLines || journal.journalLines.length === 0) continue;
 
         for (const line of journal.journalLines) {
+          // Collect account identifiers for debugging
+          if (line.accountID) accountIdsInJournals.add(line.accountID);
+          if (line.accountCode) accountCodesInJournals.add(line.accountCode);
+          if (line.accountName) accountNamesInJournals.add(line.accountName.toLowerCase().trim());
+          
           // Match by account ID, name, or code
           const lineAccountId = line.accountID || '';
           const lineAccountCode = line.accountCode || '';
-          const lineAccountName = line.accountName || '';
+          const lineAccountName = (line.accountName || '').toLowerCase().trim();
 
           const matchesAccount =
             (accountId && lineAccountId === accountId) ||
             (accountCode && lineAccountCode === accountCode) ||
-            (accountName && lineAccountName.toLowerCase().trim() === accountName.toLowerCase().trim());
+            (accountName && lineAccountName === accountName.toLowerCase().trim());
 
           if (matchesAccount) {
             // Calculate amount - use netAmount or grossAmount
@@ -958,6 +1003,26 @@ export class XeroService {
         const dateA = new Date(a.date).getTime();
         const dateB = new Date(b.date).getTime();
         return dateB - dateA;
+      });
+
+      // Log debugging information
+      logger.info(`(JOURNALS) Account matching debug:`, {
+        requestedAccountId: accountId,
+        requestedAccountName: accountName,
+        requestedAccountCode: accountCode,
+        totalJournalsFetched: allJournals.length,
+        journalsInDateRange: allJournals.filter(j => {
+          if (!j.journalDate) return false;
+          const jDate = new Date(j.journalDate);
+          return jDate >= fromDateObj && jDate <= toDateObj;
+        }).length,
+        uniqueAccountIdsInJournals: Array.from(accountIdsInJournals).slice(0, 10), // First 10 for logging
+        uniqueAccountNamesInJournals: Array.from(accountNamesInJournals).slice(0, 10),
+        uniqueAccountCodesInJournals: Array.from(accountCodesInJournals).slice(0, 10),
+        matchingTransactionsFound: matchingTransactions.length,
+        accountIdInJournals: accountIdsInJournals.has(accountId),
+        accountNameInJournals: accountNamesInJournals.has(accountName.toLowerCase().trim()),
+        accountCodeInJournals: accountCodesInJournals.has(accountCode),
       });
 
       logger.info(`(JOURNALS) Found ${matchingTransactions.length} transactions for account ${accountName} (${accountId})`);
