@@ -262,15 +262,15 @@ app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
       return;
     }
 
-    // Get transactions for "The Forest" account using Journals endpoint
-    const transactions = await xeroService.getAccountTransactionsFromJournals(
-      tokenSet,
-      forestAccount.accountId,
-      forestAccount.name,
-      forestAccount.code,
-      formatDate(fromDate),
-      formatDate(toDate)
-    );
+        // Get transactions for "The Forest" account using BankTransactions endpoint
+        const transactions = await xeroService.getBankTransactions(
+          tokenSet,
+          forestAccount.accountId,
+          forestAccount.name,
+          forestAccount.code,
+          formatDate(fromDate),
+          formatDate(toDate)
+        );
 
     // Update session with potentially refreshed token
     const updatedTokenSet = req.session.xeroTokenSet;
@@ -334,16 +334,28 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
       return date.toISOString().split('T')[0];
     };
 
-    const xeroService = new XeroService(tokenSet);
-    // Use Journals endpoint instead of BankTransactions for more comprehensive data
-    const transactions = await xeroService.getAccountTransactionsFromJournals(
-      tokenSet,
-      accountId,
-      accountName || '',
-      accountCode || '',
-      formatDate(fromDate),
-      formatDate(toDate)
-    );
+        const xeroService = new XeroService(tokenSet);
+        
+        // Get the account code if not provided - fetch from bank accounts list
+        let effectiveAccountCode = accountCode || '';
+        if (!effectiveAccountCode) {
+          const bankAccounts = await xeroService.getBankAccounts(tokenSet);
+          const matchingAccount = bankAccounts.find(acc => acc.accountId === accountId);
+          if (matchingAccount) {
+            effectiveAccountCode = matchingAccount.code;
+            logger.info(`Retrieved account code for ${accountName}: ${effectiveAccountCode}`);
+          }
+        }
+        
+        // Use BankTransactions endpoint - this is the correct endpoint for bank account transactions
+        const transactions = await xeroService.getBankTransactions(
+          tokenSet,
+          accountId,
+          accountName || '',
+          effectiveAccountCode,
+          formatDate(fromDate),
+          formatDate(toDate)
+        );
 
     // Update session with potentially refreshed token
     const updatedTokenSet = req.session.xeroTokenSet;
