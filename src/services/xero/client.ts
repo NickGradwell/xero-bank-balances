@@ -1014,11 +1014,21 @@ export class XeroService {
           const lineAccountId = line.accountID || '';
           const lineAccountCode = line.accountCode || '';
           const lineAccountName = (line.accountName || '').toLowerCase().trim();
+          const requestedAccountNameLower = (accountName || '').toLowerCase().trim();
 
-          const matchesAccount =
+          // Try exact match first
+          let matchesAccount =
             (accountId && lineAccountId === accountId) ||
             (accountCode && lineAccountCode === accountCode) ||
-            (accountName && lineAccountName === accountName.toLowerCase().trim());
+            (accountName && lineAccountName === requestedAccountNameLower);
+          
+          // If no exact match, try partial name matching (for cases like "St Elmo House (8 Lyndhurst)" vs "St Elmo House")
+          if (!matchesAccount && accountName && lineAccountName) {
+            // Check if account name contains the requested name or vice versa
+            matchesAccount = 
+              lineAccountName.includes(requestedAccountNameLower) ||
+              requestedAccountNameLower.includes(lineAccountName);
+          }
 
           if (matchesAccount) {
             // Calculate amount - use netAmount or grossAmount
@@ -1065,24 +1075,41 @@ export class XeroService {
         return dateB - dateA;
       });
 
-      // Log debugging information
-      logger.info(`(JOURNALS) Account matching debug:`, {
+      // Log debugging information - split into multiple log statements to ensure all info is captured
+      logger.info(`(JOURNALS) Account matching debug - Requested:`, {
         requestedAccountId: accountId,
         requestedAccountName: accountName,
         requestedAccountCode: accountCode,
+      });
+      
+      logger.info(`(JOURNALS) Account matching debug - Journals:`, {
         totalJournalsFetched: allJournals.length,
         journalsInDateRange: allJournals.filter(j => {
           if (!j.journalDate) return false;
           const jDate = new Date(j.journalDate);
           return jDate >= fromDateObj && jDate <= toDateObj;
         }).length,
-        uniqueAccountIdsInJournals: Array.from(accountIdsInJournals).slice(0, 10), // First 10 for logging
-        uniqueAccountNamesInJournals: Array.from(accountNamesInJournals).slice(0, 10),
-        uniqueAccountCodesInJournals: Array.from(accountCodesInJournals).slice(0, 10),
+      });
+      
+      logger.info(`(JOURNALS) Account matching debug - Unique accounts in journals (first 20):`, {
+        uniqueAccountIdsCount: accountIdsInJournals.size,
+        uniqueAccountIds: Array.from(accountIdsInJournals).slice(0, 20),
+        uniqueAccountNamesCount: accountNamesInJournals.size,
+        uniqueAccountNames: Array.from(accountNamesInJournals).slice(0, 20),
+        uniqueAccountCodesCount: accountCodesInJournals.size,
+        uniqueAccountCodes: Array.from(accountCodesInJournals).slice(0, 20),
+      });
+      
+      logger.info(`(JOURNALS) Account matching debug - Match results:`, {
         matchingTransactionsFound: matchingTransactions.length,
         accountIdInJournals: accountIdsInJournals.has(accountId),
-        accountNameInJournals: accountNamesInJournals.has(accountName.toLowerCase().trim()),
+        accountNameInJournals: accountNamesInJournals.has((accountName || '').toLowerCase().trim()),
         accountCodeInJournals: accountCodesInJournals.has(accountCode),
+        // Check for partial matches
+        accountNamePartialMatches: Array.from(accountNamesInJournals).filter(name => 
+          name.includes((accountName || '').toLowerCase().trim()) || 
+          (accountName || '').toLowerCase().trim().includes(name)
+        ).slice(0, 5),
       });
 
       logger.info(`(JOURNALS) Found ${matchingTransactions.length} transactions for account ${accountName} (${accountId})`);
