@@ -818,7 +818,14 @@
         let october2025CurrentPage = 1;
         const october2025PageSize = 100;
 
+        let october2025Loading = false;
+
         async function showOctober2025Transactions() {
+            // Prevent multiple concurrent requests
+            if (october2025Loading) {
+                return;
+            }
+
             const modal = document.getElementById('october2025Modal');
             const loading = document.getElementById('october2025Loading');
             const container = document.getElementById('october2025Container');
@@ -832,6 +839,8 @@
             error.classList.add('hidden');
             table.innerHTML = '';
             accountFilters.innerHTML = '';
+
+            october2025Loading = true;
 
             try {
                 const response = await fetch('/api/xero/transactions/october-2025');
@@ -887,6 +896,8 @@
                 loading.classList.add('hidden');
                 error.classList.remove('hidden');
                 error.textContent = err.message || 'Failed to load October 2025 transactions';
+            } finally {
+                october2025Loading = false;
             }
         }
 

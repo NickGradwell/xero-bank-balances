@@ -421,7 +421,8 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
     const client = getXeroClient();
     
     // Fetch ALL journals for October 2025 (no limit)
-    const formattedTransactions: any[] = [];
+    // Use a Map to deduplicate transactions by unique key
+    const transactionsMap = new Map<string, any>();
     let offset = 0;
     const fromDateObj = new Date(fromDate);
     fromDateObj.setHours(0, 0, 0, 0);
@@ -459,8 +460,20 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
           journalsInRange++;
 
           // Each journal line represents a transaction entry
-          for (const line of journal.journalLines) {
+          // Use line index to create unique key for each line in a journal
+          journal.journalLines.forEach((line, lineIndex) => {
+            // Create unique key: journalID + accountID + lineIndex + amount
+            // This ensures we don't duplicate the same journal line
+            const journalID = journal.journalID || `journal-${journal.journalNumber}`;
+            const accountID = line.accountID || '';
             const amount = line.netAmount || line.grossAmount || 0;
+            const uniqueKey = `${journalID}|${accountID}|${lineIndex}|${amount}`;
+            
+            // Skip if we've already seen this transaction
+            if (transactionsMap.has(uniqueKey)) {
+              return;
+            }
+
             const currencyCode = 'GBP';
             
             const formattedAmount = new Intl.NumberFormat('en-GB', {
@@ -478,8 +491,8 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
               description = journal.journalNumber?.toString() || 'Journal Entry';
             }
 
-            formattedTransactions.push({
-              transactionId: journal.journalID || `journal-${journal.journalNumber}`,
+            const transaction = {
+              transactionId: journalID,
               date: journal.journalDate ? new Date(journal.journalDate).toISOString().split('T')[0] : '',
               description: description,
               reference: journal.reference || journal.sourceID,
@@ -487,18 +500,20 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
               amountFormatted: formattedAmount,
               type: amount >= 0 ? 'DEBIT' : 'CREDIT',
               status: journal.createdDateUTC ? 'AUTHORISED' : 'DRAFT',
-              bankAccountId: line.accountID || '',
+              bankAccountId: accountID,
               bankAccountName: line.accountName || '',
               bankAccountCode: line.accountCode || '',
               journalNumber: journal.journalNumber,
               journalID: journal.journalID,
-            });
-          }
+            };
+
+            transactionsMap.set(uniqueKey, transaction);
+          });
         }
 
         if (journalsInRange > 0) {
           consecutiveOutOfRangePages = 0;
-          logger.info(`Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange} in date range (total transactions: ${formattedTransactions.length})`);
+          logger.info(`Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange} in date range (total unique transactions: ${transactionsMap.size})`);
         } else {
           consecutiveOutOfRangePages++;
           if (consecutiveOutOfRangePages >= maxConsecutiveOutOfRangePages) {
@@ -546,7 +561,17 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
       }
     }
 
-    logger.info(`Fetched ${formattedTransactions.length} total journal entries for October 2025`);
+    // Convert Map to Array
+    const formattedTransactions = Array.from(transactionsMap.values());
+    
+    // Sort by date (most recent first) for consistent ordering
+    formattedTransactions.sort((a, b) => {
+      const dateA = new Date(a.date).getTime();
+      const dateB = new Date(b.date).getTime();
+      return dateB - dateA;
+    });
+
+    logger.info(`Fetched ${formattedTransactions.length} unique journal entries for October 2025 (deduplicated from ${transactionsMap.size} entries)`);
 
     res.json({
       count: formattedTransactions.length,
