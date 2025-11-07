@@ -717,24 +717,24 @@ app.get('/api/xero/cache/job/:jobId', async (req, res): Promise<void> => {
 
 app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<void> => {
   try {
-    const tokenSet = req.session.xeroTokenSet;
+    const sessionData = req.session as AppSession | null;
+    const { accountId } = req.params;
 
-    if (!tokenSet) {
-      res.status(401).json({
-        error: 'Not authenticated',
-        requiresAuth: true,
-      });
-      return;
+    if (!sessionData?.xeroTokenSet) {
+      logger.debug('Serving cached transactions without active session token', { accountId });
     }
 
-    const { accountId } = req.params;
-    const accountNameParam = req.query.accountName as string | undefined;
-    const accountCodeParam = req.query.accountCode as string | undefined;
+    const accountNameParam = typeof req.query.accountName === 'string' ? req.query.accountName : undefined;
+    const accountCodeParam = typeof req.query.accountCode === 'string' ? req.query.accountCode : undefined;
     const forceRefresh = req.query.forceRefresh === 'true';
     const fromDateParam = req.query.fromDate as string | undefined;
     const toDateParam = req.query.toDate as string | undefined;
     const fallbackMonth = req.query.month ? parseInt(req.query.month as string, 10) : undefined;
     const fallbackYear = req.query.year ? parseInt(req.query.year as string, 10) : undefined;
+
+    if (forceRefresh) {
+      logger.warn('forceRefresh parameter is ignored; returning cached data only', { accountId });
+    }
 
     const parseDateInput = (value: string, endOfRange = false): Date | null => {
       const monthMatch = value.match(/^\d{4}-\d{2}$/);
@@ -826,78 +826,58 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
     }
 
     if (monthEntries.length === 0) {
-      res.json({ transactions: [], count: 0, fromDate: normalizedRangeStart.toISOString(), toDate: normalizedRangeEnd.toISOString(), range: { months: 0, cachedMonths: 0, refreshedMonths: 0 } });
+      res.json({
+        transactions: [],
+        count: 0,
+        fromDate: normalizedRangeStart.toISOString(),
+        toDate: normalizedRangeEnd.toISOString(),
+        range: { months: 0, cachedMonths: 0, refreshedMonths: 0, missingMonths: 0, cachedMonthDetails: [], missingMonthDetails: [] },
+        cacheStatus: 'missing',
+      });
       return;
-    }
-
-    let currentTokenSet = tokenSet;
-    let xeroService = new XeroService(currentTokenSet);
-
-    let effectiveAccountName = accountNameParam || '';
-    let effectiveAccountCode = accountCodeParam || '';
-
-    if (!effectiveAccountName || !effectiveAccountCode) {
-      const bankAccounts = await xeroService.getBankAccounts(currentTokenSet);
-      const matchingAccount = bankAccounts.find((acc) => acc.accountId === accountId);
-      if (matchingAccount) {
-        effectiveAccountName = effectiveAccountName || matchingAccount.name || '';
-        effectiveAccountCode = effectiveAccountCode || matchingAccount.code || '';
-        logger.info('Resolved account metadata for caching', { accountId, effectiveAccountName, effectiveAccountCode });
-      } else {
-        logger.warn('Account metadata not found in bank accounts list', { accountId });
-      }
     }
 
     const formatDate = (date: Date): string => date.toISOString().split('T')[0];
 
     const aggregatedTransactions: BankTransaction[] = [];
+    const cachedMonthDetails: Array<{ month: number; year: number; fetchedAt: string; fromDate: string; toDate: string; transactionCount: number }> = [];
+    const missingMonthDetails: Array<{ month: number; year: number }> = [];
+
     let cachedMonths = 0;
-    let refreshedMonths = 0;
+    let effectiveAccountName = accountNameParam || '';
+    let effectiveAccountCode = accountCodeParam || '';
 
     for (const entry of monthEntries) {
-      const monthStartStr = formatDate(entry.start);
-      const monthEndStr = formatDate(entry.end);
-      let monthTransactions: BankTransaction[] | null = null;
-
-      if (!forceRefresh) {
-        const cached = await getCachedTransactions(accountId, entry.month, entry.year);
-        if (cached) {
-          monthTransactions = cached.transactions;
-          cachedMonths += 1;
-        }
-      }
-
-      if (!monthTransactions) {
-        monthTransactions = await xeroService.getAccountTransactionsReport(
-          currentTokenSet,
-          accountId,
-          effectiveAccountName || '',
-          effectiveAccountCode || '',
-          monthStartStr,
-          monthEndStr
-        );
-
-        refreshedMonths += 1;
-
-        await saveTransactionsToCache({
-          accountId,
-          accountName: effectiveAccountName || accountNameParam || '',
-          accountCode: effectiveAccountCode || accountCodeParam || '',
+      const cached = await getCachedTransactions(accountId, entry.month, entry.year);
+      if (cached) {
+        aggregatedTransactions.push(...cached.transactions);
+        cachedMonths += 1;
+        cachedMonthDetails.push({
           month: entry.month,
           year: entry.year,
-          fromDate: monthStartStr,
-          toDate: monthEndStr,
-          transactions: monthTransactions,
+          fetchedAt: cached.fetchedAt,
+          fromDate: cached.fromDate,
+          toDate: cached.toDate,
+          transactionCount: cached.transactions.length,
         });
 
-        const updatedTokenSet = req.session.xeroTokenSet;
-        if (updatedTokenSet && updatedTokenSet !== currentTokenSet) {
-          currentTokenSet = updatedTokenSet;
-          xeroService = new XeroService(currentTokenSet);
+        if (!effectiveAccountName && cached.accountName) {
+          effectiveAccountName = cached.accountName;
         }
-      }
 
-      aggregatedTransactions.push(...monthTransactions);
+        if (!effectiveAccountCode && cached.accountCode) {
+          effectiveAccountCode = cached.accountCode;
+        }
+      } else {
+        missingMonthDetails.push({ month: entry.month, year: entry.year });
+      }
+    }
+
+    if (missingMonthDetails.length > 0) {
+      logger.warn('Transactions requested for months not yet cached', {
+        accountId,
+        missingMonths: missingMonthDetails,
+      });
     }
 
     const startTime = normalizedRangeStart.getTime();
@@ -925,8 +905,13 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
       toDate: formatDate(normalizedRangeEnd),
       months: monthEntries.length,
       cachedMonths,
-      refreshedMonths,
+      refreshedMonths: 0,
+      missingMonths: missingMonthDetails.length,
+      cachedMonthDetails,
+      missingMonthDetails,
     };
+
+    const cacheStatus = missingMonthDetails.length === 0 ? 'complete' : cachedMonths > 0 ? 'partial' : 'missing';
 
     res.json({
       transactions: filteredTransactions,
@@ -934,12 +919,20 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
       fromDate: rangeSummary.fromDate,
       toDate: rangeSummary.toDate,
       range: rangeSummary,
-      cached: cachedMonths === monthEntries.length && refreshedMonths === 0,
+      cacheStatus,
+      cachedMonths: cachedMonthDetails,
+      missingMonths: missingMonthDetails,
+      account: {
+        id: accountId,
+        name: effectiveAccountName,
+        code: effectiveAccountCode,
+      },
+      cached: cacheStatus === 'complete',
     });
   } catch (error) {
-    logger.error('Failed to fetch bank transactions', { error });
+    logger.error('Failed to load cached bank transactions', { error });
     res.status(500).json({
-      error: 'Failed to fetch bank transactions',
+      error: 'Failed to load cached bank transactions',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
