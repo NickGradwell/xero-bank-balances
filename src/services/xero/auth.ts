@@ -80,7 +80,7 @@ export async function exchangeCodeForToken(
       xero_tenant_id: tenantId,
     };
 
-    await setTokenSet(tokenData);
+    await setTokenSet(tokenData, { updateTenants: false });
 
     return tokenData;
   } catch (error) {
@@ -162,7 +162,9 @@ export async function refreshAccessToken(refreshToken: string, tenantId?: string
       xero_tenant_id: updatedTenantId,
     };
 
-    await setTokenSet(refreshed);
+    if (!refreshed.access_token) {
+      throw new Error('Refreshed token set is missing access token');
+    }
 
     return refreshed;
   } catch (error) {
@@ -185,8 +187,12 @@ export async function refreshAccessToken(refreshToken: string, tenantId?: string
   }
 }
 
-export async function setTokenSet(tokenSet: XeroTokenSet): Promise<void> {
-  await storeTokenSet(tokenSet);
+export async function setTokenSet(tokenSet: XeroTokenSet, options?: { persist?: boolean; updateTenants?: boolean }): Promise<void> {
+  const { persist = true, updateTenants = true } = options ?? {};
+
+  if (persist) {
+    await storeTokenSet(tokenSet);
+  }
 
   const client = getXeroClient();
   client.setTokenSet({
@@ -198,7 +204,10 @@ export async function setTokenSet(tokenSet: XeroTokenSet): Promise<void> {
     expires_in: tokenSet.expires_at - Math.floor(Date.now() / 1000),
     tenantId: tokenSet.xero_tenant_id,
   });
-  await client.updateTenants();
+
+  if (updateTenants) {
+    await client.updateTenants();
+  }
 }
 
 export function isTokenExpired(tokenSet: XeroTokenSet): boolean {

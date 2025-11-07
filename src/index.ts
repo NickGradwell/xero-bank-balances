@@ -76,7 +76,7 @@ async function cacheTransactionsForAccountsMonth(
 
     const initialService = new XeroService(currentTokenSet);
     currentTokenSet = await initialService.ensureValidToken(currentTokenSet);
-    await setTokenSet(currentTokenSet);
+    await setTokenSet(currentTokenSet, { persist: false, updateTenants: false });
     if (sessionData) {
       sessionData.xeroTokenSet = currentTokenSet;
     }
@@ -109,7 +109,7 @@ async function cacheTransactionsForAccountsMonth(
         const sessionToken: XeroTokenSet = sessionData?.xeroTokenSet ?? currentTokenSet;
         const service = new XeroService(sessionToken);
         currentTokenSet = await service.ensureValidToken(sessionToken);
-        await setTokenSet(currentTokenSet);
+        await setTokenSet(currentTokenSet, { persist: false, updateTenants: false });
         if (sessionData) {
           sessionData.xeroTokenSet = currentTokenSet;
         }

@@ -4,24 +4,82 @@ import { BankAccount, BankTransaction } from '../../types/xero';
 import { getXeroClient, setTokenSet, isTokenExpired, refreshAccessToken } from './auth';
 import { XeroTokenSet } from '../../types/xero';
 
+const MAX_RATE_LIMIT_RETRIES = 3;
+const MIN_RETRY_DELAY_MS = 2000;
+let activeRefreshPromise: Promise<XeroTokenSet> | null = null;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withRateLimit<T>(operation: () => Promise<T>, context: string, attempt = 1): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    const status = (error as any)?.response?.status;
+    if (status === 429 && attempt <= MAX_RATE_LIMIT_RETRIES) {
+      const retryAfterHeader = (error as any).response?.headers?.['retry-after'];
+      const retryAfterSeconds = Number.parseInt(retryAfterHeader ?? '0', 10);
+      const delayMs = Math.max(MIN_RETRY_DELAY_MS, retryAfterSeconds * 1000);
+      const jitter = Math.floor(Math.random() * 400);
+      logger.warn(`[RateLimit] ${context} hit 429. Backing off for ${delayMs + jitter}ms (attempt ${attempt}/${MAX_RATE_LIMIT_RETRIES})`);
+      await sleep(delayMs + jitter);
+      return withRateLimit(operation, context, attempt + 1);
+    }
+    throw error;
+  }
+}
+
 export class XeroService {
   private client: XeroClient;
 
   constructor(tokenSet?: XeroTokenSet) {
     this.client = getXeroClient();
     if (tokenSet) {
-      setTokenSet(tokenSet).catch(err => {
+      setTokenSet(tokenSet, { persist: false, updateTenants: false }).catch(err => {
         logger.error('Failed to set token set in constructor', { error: err });
       });
     }
   }
 
   async ensureValidToken(tokenSet: XeroTokenSet): Promise<XeroTokenSet> {
-    if (isTokenExpired(tokenSet)) {
-      logger.info('Token expired, refreshing...', { tenantId: tokenSet.xero_tenant_id });
-      // Pass tenantId to refresh function so it doesn't need to look it up
-      return await refreshAccessToken(tokenSet.refresh_token, tokenSet.xero_tenant_id);
+    if (!tokenSet) {
+      throw new Error('No token set provided');
     }
+
+    if (!tokenSet.refresh_token) {
+      throw new Error('Cannot refresh token: refresh token missing');
+    }
+
+    if (!tokenSet.access_token || isTokenExpired(tokenSet)) {
+      logger.info('Token expired or missing access token, refreshing...', {
+        tenantId: tokenSet.xero_tenant_id,
+      });
+
+      if (!activeRefreshPromise) {
+        activeRefreshPromise = (async () => {
+          const refreshed = await refreshAccessToken(tokenSet.refresh_token, tokenSet.xero_tenant_id);
+          if (!refreshed.access_token) {
+            throw new Error('Refreshed token set is missing an access token');
+          }
+          await setTokenSet(refreshed, { updateTenants: false });
+          return refreshed;
+        })().catch((error) => {
+          // ensure subsequent callers can attempt refresh again
+          activeRefreshPromise = null;
+          throw error;
+        });
+      }
+
+      try {
+        const refreshedTokenSet = await activeRefreshPromise;
+        if (tokenSet !== refreshedTokenSet) {
+          logger.debug('Token refresh completed, returning updated token set');
+        }
+        return refreshedTokenSet;
+      } finally {
+        activeRefreshPromise = null;
+      }
+    }
+
     return tokenSet;
   }
 
@@ -29,7 +87,7 @@ export class XeroService {
     try {
       // Ensure token is valid
       const validTokenSet = await this.ensureValidToken(tokenSet);
-      await setTokenSet(validTokenSet);
+      await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
       const tenantId = validTokenSet.xero_tenant_id;
       if (!tenantId) {
@@ -37,7 +95,10 @@ export class XeroService {
       }
 
       // Get all accounts
-      const accountsResponse = await this.client.accountingApi.getAccounts(tenantId);
+      const accountsResponse = await withRateLimit(
+        () => this.client.accountingApi.getAccounts(tenantId),
+        'getAccounts'
+      );
       const accounts = accountsResponse.body.accounts || [];
 
       // Filter for bank accounts only - AccountType enum comparison
@@ -77,10 +138,13 @@ export class XeroService {
           return date.toISOString().split('T')[0];
         };
         
-        const reportResponse = await this.client.accountingApi.getReportBankSummary(
-          tenantId,
-          formatDate(fromDate),
-          formatDate(toDate)
+        const reportResponse = await withRateLimit(
+          () => this.client.accountingApi.getReportBankSummary(
+            tenantId,
+            formatDate(fromDate),
+            formatDate(toDate)
+          ),
+          'getReportBankSummary'
         );
         const report = reportResponse.body.reports?.[0];
         
@@ -188,7 +252,7 @@ export class XeroService {
     try {
       // Ensure token is valid
       const validTokenSet = await this.ensureValidToken(tokenSet);
-      await setTokenSet(validTokenSet);
+      await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
       const tenantId = validTokenSet.xero_tenant_id;
       if (!tenantId) {
@@ -249,13 +313,16 @@ export class XeroService {
       });
       
       while (hasMore && page <= maxPages) {
-        const response = await this.client.accountingApi.getBankTransactions(
-          tenantId,
-          undefined, // ifModifiedSince - set to undefined to get all transactions regardless of modification date
-          where,
-          'Date DESC', // order by date descending
-          page,
-          undefined // unitdp
+        const response = await withRateLimit(
+          () => this.client.accountingApi.getBankTransactions(
+            tenantId,
+            undefined,
+            where,
+            'Date DESC',
+            page,
+            undefined
+          ),
+          `getBankTransactions page ${page} account ${accountId}`
         );
         
         const transactions = response.body.bankTransactions || [];
@@ -317,13 +384,16 @@ export class XeroService {
         for (const altWhere of alternateWhereClauses) {
           try {
             logger.info(`Attempting alternate where clause: ${altWhere}`);
-            const testResponse = await this.client.accountingApi.getBankTransactions(
-              tenantId,
-              undefined,
-              altWhere,
-              'Date DESC',
-              1,
-              undefined
+            const testResponse = await withRateLimit(
+              () => this.client.accountingApi.getBankTransactions(
+                tenantId,
+                undefined,
+                altWhere,
+                'Date DESC',
+                1,
+                undefined
+              ),
+              `getBankTransactions alt-test account ${accountId}`
             );
             const testTx = testResponse.body.bankTransactions || [];
             logger.info(`Alternate where result: ${testTx.length} transactions`);
@@ -335,13 +405,16 @@ export class XeroService {
               hasMore = true;
               logger.info(`Using alternate where clause for pagination: ${where}`);
               while (hasMore && page <= maxPages) {
-                const resp = await this.client.accountingApi.getBankTransactions(
-                  tenantId,
-                  undefined,
-                  where,
-                  'Date DESC',
-                  page,
-                  undefined
+                const resp = await withRateLimit(
+                  () => this.client.accountingApi.getBankTransactions(
+                    tenantId,
+                    undefined,
+                    where,
+                    'Date DESC',
+                    page,
+                    undefined
+                  ),
+                  `(ALT) getBankTransactions page ${page} account ${accountId}`
                 );
                 const txs = resp.body.bankTransactions || [];
                 allTransactions = allTransactions.concat(txs);
@@ -368,13 +441,16 @@ export class XeroService {
             let diagPage = 1;
             const diagMaxPages = 10; // Fetch more pages for diagnostics
             while (diagPage <= diagMaxPages) {
-              const diagResp = await this.client.accountingApi.getBankTransactions(
-                tenantId,
-                undefined, // ifModifiedSince - undefined to get all
-                undefined, // where - undefined to get all accounts
-                'Date DESC',
-                diagPage,
-                undefined
+              const diagResp = await withRateLimit(
+                () => this.client.accountingApi.getBankTransactions(
+                  tenantId,
+                  undefined,
+                  undefined,
+                  'Date DESC',
+                  diagPage,
+                  undefined
+                ),
+                `(DIAG) getBankTransactions page ${diagPage}`
               );
               const txs = diagResp.body.bankTransactions || [];
               diagnosticTransactions.push(...txs);
@@ -465,13 +541,16 @@ export class XeroService {
         // Try fetching without date filter - use a very wide date range (last 10 years)
         // Note: Xero API where clause might support date filtering, but we'll try without first
         try {
-          const fallbackResponse = await this.client.accountingApi.getBankTransactions(
-            tenantId,
-            undefined,
-            where, // Still use where clause to filter by account
-            'Date DESC',
-            1,
-            undefined
+          const fallbackResponse = await withRateLimit(
+            () => this.client.accountingApi.getBankTransactions(
+              tenantId,
+              undefined,
+              where, // Still use where clause to filter by account
+              'Date DESC',
+              1,
+              undefined
+            ),
+            'getBankTransactions fallback fetch'
           );
           
           const fallbackTransactions = fallbackResponse.body.bankTransactions || [];
@@ -704,7 +783,7 @@ export class XeroService {
   }>> {
     // Ensure token is valid
     const validTokenSet = await this.ensureValidToken(tokenSet);
-    await setTokenSet(validTokenSet);
+    await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
     const tenantId = validTokenSet.xero_tenant_id;
     if (!tenantId) {
@@ -717,13 +796,16 @@ export class XeroService {
     logger.info(`(ALL) Fetching up to ${actualMaxPages} pages of transactions`);
     
     while (page <= actualMaxPages) {
-      const response = await this.client.accountingApi.getBankTransactions(
-        tenantId,
-        undefined,
-        undefined,
-        'Date DESC',
-        page,
-        undefined
+      const response = await withRateLimit(
+        () => this.client.accountingApi.getBankTransactions(
+          tenantId,
+          undefined,
+          undefined,
+          'Date DESC',
+          page,
+          undefined
+        ),
+        `(ALL) getBankTransactions page ${page}`
       );
       const transactions = response.body.bankTransactions || [];
       allTransactions = allTransactions.concat(transactions);
@@ -816,9 +898,8 @@ export class XeroService {
     toDate: string
   ): Promise<BankTransaction[]> {
     try {
-      // Ensure token is valid
       const validTokenSet = await this.ensureValidToken(tokenSet);
-      await setTokenSet(validTokenSet);
+      await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
       const tenantId = validTokenSet.xero_tenant_id;
       if (!tenantId) {
@@ -864,11 +945,14 @@ export class XeroService {
       while (hasMore && offset < maxPages * pageSize && allJournals.length < maxJournalsInRange) {
         try {
           logger.info(`(JOURNALS) Attempting to fetch journals at offset ${offset} (fromDate: ${fromDate}, toDate: ${toDate})`);
-          const response = await this.client.accountingApi.getJournals(
-            tenantId,
-            ifModifiedSince, // Filter by date at API level
-            offset, // offset for pagination
-            false // paymentsOnly (false = get all journals, not just payment journals)
+          const response = await withRateLimit(
+            () => this.client.accountingApi.getJournals(
+              tenantId,
+              ifModifiedSince,
+              offset,
+              false
+            ),
+            `(JOURNALS) offset ${offset}`
           );
 
           const journals = response.body.journals || [];
@@ -1139,7 +1223,7 @@ export class XeroService {
   ): Promise<BankTransaction[]> {
     try {
       const validTokenSet = await this.ensureValidToken(tokenSet);
-      await setTokenSet(validTokenSet);
+      await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
       const tenantId = validTokenSet.xero_tenant_id;
       if (!tenantId) {
@@ -1244,7 +1328,7 @@ export class XeroService {
   ): Promise<BankTransaction[]> {
     try {
       const validTokenSet = await this.ensureValidToken(tokenSet);
-      await setTokenSet(validTokenSet);
+      await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
       const tenantId = validTokenSet.xero_tenant_id;
       if (!tenantId) {
@@ -1267,12 +1351,15 @@ export class XeroService {
 
       while (hasMore && page <= maxPages) {
         try {
-          const response = await this.client.accountingApi.getPayments(
-            tenantId,
-            undefined, // ifModifiedSince
-            undefined, // where - we'll filter client-side
-            'Date DESC',
-            page
+          const response = await withRateLimit(
+            () => this.client.accountingApi.getPayments(
+              tenantId,
+              undefined,
+              undefined,
+              'Date DESC',
+              page
+            ),
+            `(PAYMENTS) page ${page} account ${accountId}`
           );
 
           const payments = response.body.payments || [];
@@ -1439,7 +1526,7 @@ export class XeroService {
   ): Promise<BankTransaction[]> {
     try {
       const validTokenSet = await this.ensureValidToken(tokenSet);
-      await setTokenSet(validTokenSet);
+      await setTokenSet(validTokenSet, { persist: false, updateTenants: false });
 
       const tenantId = validTokenSet.xero_tenant_id;
       if (!tenantId) {
@@ -1458,11 +1545,14 @@ export class XeroService {
       let allTransfers: BankTransfer[] = [];
 
       try {
-        const response = await this.client.accountingApi.getBankTransfers(
-          tenantId,
-          undefined, // ifModifiedSince
-          undefined, // where - we'll filter client-side
-          'Date DESC'
+        const response = await withRateLimit(
+          () => this.client.accountingApi.getBankTransfers(
+            tenantId,
+            undefined,
+            undefined,
+            'Date DESC'
+          ),
+          '(BANK TRANSFERS) fetch all'
         );
 
         const transfers = response.body.bankTransfers || [];
