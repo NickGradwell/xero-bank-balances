@@ -474,7 +474,7 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
       try {
         const response = await client.accountingApi.getJournals(
           tenantId,
-          fromDateObj, // ifModifiedSince - filter by date
+          fromDateObj, // ifModifiedSince - filter by date at API level (only journals modified since Oct 1, 2025)
           offset,
           false // paymentsOnly - false = get all journals
         );
