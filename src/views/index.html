@@ -21,6 +21,9 @@
                     <p class="text-gray-600 mt-1">View all connected bank account balances</p>
                 </div>
                 <div class="flex items-center gap-3">
+                    <button id="cacheOctoberBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                        <i class="fas fa-cloud-download-alt mr-1"></i>Cache Oct 2025
+                    </button>
                     <button id="october2025Btn" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
                         <i class="fas fa-calendar mr-1"></i>October 2025 Transactions
                     </button>
@@ -31,6 +34,15 @@
                         <i class="fas fa-list mr-1"></i>All Transactions
                     </button>
                     <div id="authSection"><!-- Will be populated by JavaScript --></div>
+                </div>
+                <div id="cacheStatus" class="hidden mt-4 px-4 py-3 rounded-lg text-sm flex flex-col gap-1 border">
+                    <div class="flex items-center gap-2">
+                        <i id="cacheStatusIcon" class="fas fa-info-circle text-base"></i>
+                        <span id="cacheStatusText" class="font-medium"></span>
+                    </div>
+                    <div id="cacheStatusProgress" class="text-xs"></div>
+                    <div id="cacheStatusMeta" class="text-xs"></div>
+                    <div id="cacheStatusError" class="hidden text-xs"></div>
                 </div>
             </div>
         </div>
@@ -349,6 +361,259 @@
     <script>
         // Cached bank accounts for reuse in filters
         let cachedAccounts = [];
+
+        const CACHE_STATUS_MONTH = 10;
+        const CACHE_STATUS_YEAR = 2025;
+        const CACHE_STATUS_STORAGE_KEY = `cacheJobId_${CACHE_STATUS_YEAR}_${CACHE_STATUS_MONTH}`;
+
+        let cacheStatusCurrentJob = null;
+        let cacheStatusPollIntervalId = null;
+        let cacheStatusTimerIntervalId = null;
+        let cacheStatusJobId = null;
+
+        function clearCacheStatusIntervals() {
+            if (cacheStatusPollIntervalId) {
+                clearInterval(cacheStatusPollIntervalId);
+                cacheStatusPollIntervalId = null;
+            }
+            if (cacheStatusTimerIntervalId) {
+                clearInterval(cacheStatusTimerIntervalId);
+                cacheStatusTimerIntervalId = null;
+            }
+        }
+
+        function hideCacheStatus() {
+            clearCacheStatusIntervals();
+            cacheStatusCurrentJob = null;
+            cacheStatusJobId = null;
+            const container = document.getElementById('cacheStatus');
+            if (container) {
+                container.classList.add('hidden');
+            }
+        }
+
+        function formatDuration(seconds) {
+            const totalSeconds = Math.max(0, Math.floor(seconds));
+            const hrs = Math.floor(totalSeconds / 3600);
+            const mins = Math.floor((totalSeconds % 3600) / 60);
+            const secs = totalSeconds % 60;
+            const parts = [
+                hrs > 0 ? String(hrs).padStart(2, '0') : '00',
+                String(mins).padStart(2, '0'),
+                String(secs).padStart(2, '0')
+            ];
+            return parts.join(':');
+        }
+
+        function updateCacheStatusTimer() {
+            const job = cacheStatusCurrentJob;
+            const metaEl = document.getElementById('cacheStatusMeta');
+            if (!job || !metaEl) {
+                return;
+            }
+
+            if (!job.startedAt) {
+                metaEl.textContent = 'Waiting to start…';
+                return;
+            }
+
+            const start = new Date(job.startedAt).getTime();
+            const end = (job.status === 'succeeded' || job.status === 'failed') && job.completedAt
+                ? new Date(job.completedAt).getTime()
+                : Date.now();
+            const elapsedSeconds = (end - start) / 1000;
+            const elapsedText = formatDuration(elapsedSeconds);
+            const updatedText = job.updatedAt
+                ? new Date(job.updatedAt).toLocaleTimeString('en-GB', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false,
+                })
+                : '';
+
+            let metaText = `Elapsed: ${elapsedText}`;
+            if (updatedText) {
+                metaText += ` · Last update: ${updatedText}`;
+            }
+            metaEl.textContent = metaText;
+        }
+
+        function updateCacheStatusUI(job) {
+            cacheStatusCurrentJob = job;
+
+            const container = document.getElementById('cacheStatus');
+            const iconEl = document.getElementById('cacheStatusIcon');
+            const textEl = document.getElementById('cacheStatusText');
+            const progressEl = document.getElementById('cacheStatusProgress');
+            const errorEl = document.getElementById('cacheStatusError');
+
+            if (!container || !iconEl || !textEl || !progressEl || !errorEl) {
+                return;
+            }
+
+            const statusClasses = {
+                pending: 'bg-blue-50 border-blue-200 text-blue-700',
+                running: 'bg-blue-50 border-blue-200 text-blue-700',
+                succeeded: 'bg-green-50 border-green-200 text-green-700',
+                failed: 'bg-red-50 border-red-200 text-red-700',
+            };
+
+            container.className = `hidden mt-4 px-4 py-3 rounded-lg text-sm flex flex-col gap-1 border ${statusClasses[job.status] || statusClasses.pending}`;
+            container.classList.remove('hidden');
+
+            let iconClass = 'fas fa-info-circle text-base';
+            let message = 'Preparing cache job…';
+
+            if (job.status === 'pending') {
+                iconClass = 'fas fa-hourglass-half text-base';
+                message = 'Preparing October 2025 cache job…';
+            } else if (job.status === 'running') {
+                iconClass = 'fas fa-spinner fa-spin text-base';
+                const total = job.totalAccounts || 0;
+                const processed = job.processedAccounts || 0;
+                if (total > 0) {
+                    const percent = Math.min(100, Math.round((processed / total) * 100));
+                    message = `Caching October 2025: ${processed} of ${total} accounts (${percent}%)`;
+                } else {
+                    message = `Caching October 2025: ${processed} accounts processed`;
+                }
+            } else if (job.status === 'succeeded') {
+                iconClass = 'fas fa-check-circle text-base';
+                const total = job.totalAccounts || job.processedAccounts || 0;
+                message = `Caching complete for October 2025${total ? ` (${job.processedAccounts}/${total} accounts)` : ''}`;
+            } else if (job.status === 'failed') {
+                iconClass = 'fas fa-exclamation-triangle text-base';
+                message = 'October 2025 cache job failed';
+            }
+
+            iconEl.className = iconClass;
+            textEl.textContent = message;
+
+            const total = job.totalAccounts || 0;
+            const processed = job.processedAccounts || 0;
+            let progressText = '';
+            if (job.status === 'pending') {
+                progressText = 'Accounts: calculating…';
+            } else if (total > 0) {
+                const percent = Math.min(100, Math.round((processed / total) * 100));
+                progressText = `Accounts: ${processed} / ${total} (${percent}%)`;
+            } else if (processed > 0) {
+                progressText = `Accounts processed: ${processed}`;
+            }
+
+            if (job.lastAccountName) {
+                progressText += progressText ? ` · Last: ${job.lastAccountName}` : `Last account: ${job.lastAccountName}`;
+            }
+
+            progressEl.textContent = progressText;
+            progressEl.classList.toggle('hidden', !progressText);
+
+            if (job.status === 'failed' && job.error) {
+                errorEl.textContent = `Error: ${job.error}`;
+                errorEl.classList.remove('hidden');
+            } else {
+                errorEl.textContent = '';
+                errorEl.classList.add('hidden');
+            }
+
+            updateCacheStatusTimer();
+        }
+
+        async function fetchCacheJobById(jobId) {
+            try {
+                const response = await fetch(`/api/xero/cache/job/${jobId}`);
+                if (response.status === 404) {
+                    return null;
+                }
+                if (!response.ok) {
+                    throw new Error('Failed to fetch cache job');
+                }
+                const data = await response.json();
+                return data.job || null;
+            } catch (error) {
+                console.warn('Failed to fetch cache job by id', error);
+                return null;
+            }
+        }
+
+        async function fetchLatestCacheJob(month, year) {
+            try {
+                const response = await fetch(`/api/xero/cache/month/status?month=${month}&year=${year}`);
+                if (!response.ok) {
+                    return null;
+                }
+                const data = await response.json();
+                return data.job || null;
+            } catch (error) {
+                console.warn('Failed to fetch latest cache job', error);
+                return null;
+            }
+        }
+
+        async function initializeCacheStatusMonitoring() {
+            const storedJobId = localStorage.getItem(CACHE_STATUS_STORAGE_KEY);
+            if (storedJobId) {
+                const storedJob = await fetchCacheJobById(storedJobId);
+                if (storedJob) {
+                    startCacheStatusTracking(storedJob);
+                    return;
+                }
+                localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
+            }
+
+            const latestJob = await fetchLatestCacheJob(CACHE_STATUS_MONTH, CACHE_STATUS_YEAR);
+            if (latestJob) {
+                startCacheStatusTracking(latestJob);
+            } else {
+                hideCacheStatus();
+            }
+        }
+
+        function startCacheStatusTracking(job) {
+            if (!job) {
+                hideCacheStatus();
+                return;
+            }
+
+            clearCacheStatusIntervals();
+            cacheStatusJobId = job.jobId;
+
+            if (job.status === 'pending' || job.status === 'running') {
+                localStorage.setItem(CACHE_STATUS_STORAGE_KEY, job.jobId);
+            } else {
+                localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
+            }
+
+            updateCacheStatusUI(job);
+
+            if (job.status === 'succeeded' || job.status === 'failed') {
+                return;
+            }
+
+            cacheStatusTimerIntervalId = setInterval(updateCacheStatusTimer, 1000);
+
+            cacheStatusPollIntervalId = setInterval(async () => {
+                if (!cacheStatusJobId) {
+                    clearCacheStatusIntervals();
+                    return;
+                }
+                const latest = await fetchCacheJobById(cacheStatusJobId);
+                if (!latest) {
+                    clearCacheStatusIntervals();
+                    hideCacheStatus();
+                    localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
+                    return;
+                }
+
+                updateCacheStatusUI(latest);
+
+                if (latest.status === 'succeeded' || latest.status === 'failed') {
+                    clearCacheStatusIntervals();
+                    localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
+                }
+            }, 5000);
+        }
 
         // Check authentication status on page load
         async function checkAuthStatus() {
@@ -700,6 +965,11 @@
                 if (october2025Btn) {
                     october2025Btn.addEventListener('click', () => showOctober2025Transactions());
                 }
+                const cacheOctoberBtn = document.getElementById('cacheOctoberBtn');
+                if (cacheOctoberBtn) {
+                    cacheOctoberBtn.addEventListener('click', () => cacheTransactionsForMonth(10, 2025));
+                }
+                await initializeCacheStatusMonitoring();
             } else {
                 showNotAuthenticatedState();
             }
@@ -813,6 +1083,33 @@
             const modal = document.getElementById('hundredTransactionsModal');
             if (modal) {
                 modal.classList.add('hidden');
+            }
+        }
+
+        async function cacheTransactionsForMonth(month, year) {
+            const monthLabel = new Date(year, month - 1, 1).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+            const confirmation = confirm(`Start caching transactions for ${monthLabel}? This runs in the background and may take a while.`);
+            if (!confirmation) {
+                return;
+            }
+            try {
+                const response = await fetch('/api/xero/cache/month', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ month, year })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to start cache job');
+                }
+                if (data.job) {
+                    startCacheStatusTracking(data.job);
+                } else {
+                    initializeCacheStatusMonitoring();
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Unknown error';
+                alert(`Failed to start cache job: ${message}`);
             }
         }
 

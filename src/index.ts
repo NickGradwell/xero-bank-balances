@@ -7,14 +7,157 @@ import { logger } from './utils/logger';
 import { getAuthorizationUrl, exchangeCodeForToken, setTokenSet, getXeroClient } from './services/xero/auth';
 import { XeroService } from './services/xero/client';
 import { XeroTokenSet } from './types/xero';
+import {
+  initTransactionCache,
+  getCachedTransactions,
+  saveTransactionsToCache,
+  closeDatabaseConnection,
+  createCacheJobRecord,
+  markCacheJobStarted,
+  updateCacheJobProgress,
+  completeCacheJob,
+  failCacheJob,
+  getCacheJobById,
+  getLatestCacheJob,
+} from './database/transactionCache';
 
 const app = express();
+
+// Initialize local transaction cache (will be awaited before server starts)
+let dbInitialized = false;
+const initializeDatabase = async (): Promise<void> => {
+  if (!dbInitialized) {
+    await initTransactionCache();
+    dbInitialized = true;
+  }
+};
 
 // Extend Express Session to include Xero token set
 declare module 'express-session' {
   interface SessionData {
     xeroTokenSet?: XeroTokenSet;
     oauthState?: string;
+  }
+}
+
+type AppSession = session.Session & { xeroTokenSet?: XeroTokenSet };
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+// Helper to cache transactions for a full month across multiple accounts
+async function cacheTransactionsForAccountsMonth(
+  sessionData: AppSession,
+  month: number,
+  year: number,
+  accountIds: string[] | undefined,
+  jobId: string
+): Promise<void> {
+  try {
+    let currentTokenSet = sessionData.xeroTokenSet;
+    if (!currentTokenSet) {
+      logger.warn('Cache job aborted: no token set available');
+      await failCacheJob({ jobId, errorMessage: 'No token set available in session' });
+      return;
+    }
+
+    const fromDate = new Date(year, month - 1, 1);
+    const toDate = new Date(year, month, 0);
+    const fromDateStr = fromDate.toISOString().split('T')[0];
+    const toDateStr = toDate.toISOString().split('T')[0];
+
+    const initialService = new XeroService(currentTokenSet);
+    const bankAccounts = await initialService.getBankAccounts(currentTokenSet);
+    const accountsToProcess = accountIds && accountIds.length > 0
+      ? bankAccounts.filter((acc) => accountIds.includes(acc.accountId))
+      : bankAccounts;
+
+    if (!accountsToProcess.length) {
+      logger.warn('Cache job aborted: no matching accounts found', { month, year, accountIds });
+      await failCacheJob({ jobId, errorMessage: 'No matching accounts found for cache job' });
+      return;
+    }
+
+    logger.info('Starting cache job for month', {
+      month,
+      year,
+      totalAccounts: accountsToProcess.length,
+    });
+
+    await markCacheJobStarted({ jobId, totalAccounts: accountsToProcess.length });
+
+    let processed = 0;
+    for (const account of accountsToProcess) {
+      processed += 1;
+      const lastAccountId = account.accountId;
+      const lastAccountName = account.name || '';
+      try {
+        currentTokenSet = sessionData.xeroTokenSet || currentTokenSet;
+        const service = new XeroService(currentTokenSet);
+        logger.info('Caching account transactions', {
+          accountId: account.accountId,
+          accountName: account.name,
+          month,
+          year,
+          position: processed,
+          total: accountsToProcess.length,
+        });
+
+        const transactions = await service.getAccountTransactionsReport(
+          currentTokenSet,
+          account.accountId,
+          account.name || '',
+          account.code || '',
+          fromDateStr,
+          toDateStr
+        );
+
+        const fetchedAt = await saveTransactionsToCache({
+          accountId: account.accountId,
+          accountName: account.name || '',
+          accountCode: account.code || '',
+          month,
+          year,
+          fromDate: fromDateStr,
+          toDate: toDateStr,
+          transactions,
+        });
+
+        currentTokenSet = sessionData.xeroTokenSet || currentTokenSet;
+
+        logger.info('Cached account transactions', {
+          accountId: account.accountId,
+          accountName: account.name,
+          month,
+          year,
+          transactionCount: transactions.length,
+          fetchedAt,
+        });
+      } catch (error) {
+        logger.error('Failed to cache transactions for account', {
+          accountId: account.accountId,
+          accountName: account.name,
+          month,
+          year,
+          error,
+        });
+      }
+
+      await updateCacheJobProgress({
+        jobId,
+        processedAccounts: processed,
+        lastAccountId,
+        lastAccountName,
+      });
+
+      await delay(1000); // brief pause between accounts to stay within rate limits
+    }
+
+    logger.info('Completed cache job', { month, year });
+    await completeCacheJob(jobId);
+  } catch (error) {
+    logger.error('Cache job failed', { month, year, error });
+    await failCacheJob({ jobId, errorMessage: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
 
@@ -720,6 +863,122 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
 });
 
 // API endpoint to get bank transactions for a specific account
+app.post('/api/xero/cache/month', async (req, res): Promise<void> => {
+  const sessionData = req.session as AppSession;
+  const tokenSet = sessionData.xeroTokenSet;
+
+  if (!tokenSet) {
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const body = (req.body || {}) as { month?: number | string; year?: number | string; accountIds?: string[] };
+  const monthInt = body.month ? parseInt(String(body.month), 10) : new Date().getMonth() + 1;
+  const yearInt = body.year ? parseInt(String(body.year), 10) : new Date().getFullYear();
+
+  if (Number.isNaN(monthInt) || monthInt < 1 || monthInt > 12) {
+    res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
+    return;
+  }
+
+  if (Number.isNaN(yearInt) || yearInt < 2000 || yearInt > 2100) {
+    res.status(400).json({ error: 'Invalid year.' });
+    return;
+  }
+
+  let accountsArray: string[] | undefined = undefined;
+  if (Array.isArray(body.accountIds)) {
+    accountsArray = body.accountIds.map((id) => String(id)).filter((id) => id.length > 0);
+  }
+
+  const jobId = randomUUID();
+
+  try {
+    const jobRecord = await createCacheJobRecord({ jobId, month: monthInt, year: yearInt });
+
+    logger.info('Starting background cache job via API request', {
+      jobId,
+      month: monthInt,
+      year: yearInt,
+      requestedAccounts: accountsArray ? accountsArray.length : 'all',
+    });
+
+    res.json({
+      status: 'started',
+      job: jobRecord,
+    });
+
+    setImmediate(() => {
+      cacheTransactionsForAccountsMonth(sessionData, monthInt, yearInt, accountsArray, jobId).catch((error) => {
+        logger.error('Background cache job failed', { jobId, month: monthInt, year: yearInt, error });
+        failCacheJob({ jobId, errorMessage: error instanceof Error ? error.message : 'Unknown error' }).catch((err) => {
+          logger.error('Failed to record cache job failure', { jobId, err });
+        });
+      });
+    });
+  } catch (error) {
+    logger.error('Failed to create cache job record', { month: monthInt, year: yearInt, error });
+    res.status(500).json({ error: 'Failed to start cache job' });
+  }
+});
+
+app.get('/api/xero/cache/month/status', async (req, res): Promise<void> => {
+  const tokenSet = req.session.xeroTokenSet;
+
+  if (!tokenSet) {
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const monthParam = req.query.month;
+  const yearParam = req.query.year;
+
+  if (!monthParam || !yearParam) {
+    res.status(400).json({ error: 'Month and year are required.' });
+    return;
+  }
+
+  const month = parseInt(String(monthParam), 10);
+  const year = parseInt(String(yearParam), 10);
+
+  if (Number.isNaN(month) || month < 1 || month > 12) {
+    res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
+    return;
+  }
+
+  if (Number.isNaN(year) || year < 2000 || year > 2100) {
+    res.status(400).json({ error: 'Invalid year.' });
+    return;
+  }
+
+  const job = await getLatestCacheJob({ month, year });
+  res.json({ job });
+});
+
+app.get('/api/xero/cache/job/:jobId', async (req, res): Promise<void> => {
+  const tokenSet = req.session.xeroTokenSet;
+
+  if (!tokenSet) {
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const { jobId } = req.params;
+
+  if (!jobId) {
+    res.status(400).json({ error: 'Job ID is required.' });
+    return;
+  }
+
+  const job = await getCacheJobById(jobId);
+  if (!job) {
+    res.status(404).json({ error: 'Job not found.' });
+    return;
+  }
+
+  res.json({ job });
+});
+
 app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<void> => {
   try {
     const tokenSet = req.session.xeroTokenSet;
@@ -733,12 +992,12 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
     }
 
     const { accountId } = req.params;
-    const accountName = req.query.accountName as string | undefined;
-    const accountCode = req.query.accountCode as string | undefined;
+    const accountNameParam = req.query.accountName as string | undefined;
+    const accountCodeParam = req.query.accountCode as string | undefined;
     const month = req.query.month ? parseInt(req.query.month as string, 10) : new Date().getMonth() + 1;
     const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
+    const forceRefresh = req.query.forceRefresh === 'true';
 
-    // Validate month and year
     if (month < 1 || month > 12) {
       res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
       return;
@@ -749,51 +1008,80 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
       return;
     }
 
-    // Calculate date range for the selected month
     const fromDate = new Date(year, month - 1, 1);
-    const toDate = new Date(year, month, 0); // Last day of the month
+    const toDate = new Date(year, month, 0);
+    const formatDate = (date: Date): string => date.toISOString().split('T')[0];
+    const fromDateStr = formatDate(fromDate);
+    const toDateStr = formatDate(toDate);
 
-    // Format dates as YYYY-MM-DD
-    const formatDate = (date: Date): string => {
-      return date.toISOString().split('T')[0];
-    };
+    if (!forceRefresh) {
+      const cached = await getCachedTransactions(accountId, month, year);
+      if (cached) {
+        res.json({
+          transactions: cached.transactions,
+          count: cached.transactions.length,
+          month,
+          year,
+          fromDate: cached.fromDate,
+          toDate: cached.toDate,
+          cached: true,
+          fetchedAt: cached.fetchedAt,
+        });
+        return;
+      }
+    }
 
-        const xeroService = new XeroService(tokenSet);
-        
-        // Get the account code if not provided - fetch from bank accounts list
-        let effectiveAccountCode = accountCode || '';
-        if (!effectiveAccountCode) {
-          const bankAccounts = await xeroService.getBankAccounts(tokenSet);
-          const matchingAccount = bankAccounts.find(acc => acc.accountId === accountId);
-          if (matchingAccount) {
-            effectiveAccountCode = matchingAccount.code;
-            logger.info(`Retrieved account code for ${accountName}: ${effectiveAccountCode}`);
-          }
-        }
-        
-        // Use Account Transactions Report - combines BankTransactions + Payments + BankTransfers
-        const transactions = await xeroService.getAccountTransactionsReport(
-          tokenSet,
-          accountId,
-          accountName || '',
-          effectiveAccountCode,
-          formatDate(fromDate),
-          formatDate(toDate)
-        );
+    const xeroService = new XeroService(tokenSet);
 
-    // Update session with potentially refreshed token
+    let effectiveAccountName = accountNameParam || '';
+    let effectiveAccountCode = accountCodeParam || '';
+
+    if (!effectiveAccountName || !effectiveAccountCode) {
+      const bankAccounts = await xeroService.getBankAccounts(tokenSet);
+      const matchingAccount = bankAccounts.find((acc) => acc.accountId === accountId);
+      if (matchingAccount) {
+        effectiveAccountName = effectiveAccountName || matchingAccount.name || '';
+        effectiveAccountCode = effectiveAccountCode || matchingAccount.code || '';
+        logger.info('Resolved account metadata for caching', { accountId, effectiveAccountName, effectiveAccountCode });
+      } else {
+        logger.warn('Account metadata not found in bank accounts list', { accountId });
+      }
+    }
+
+    const transactions = await xeroService.getAccountTransactionsReport(
+      tokenSet,
+      accountId,
+      effectiveAccountName || '',
+      effectiveAccountCode || '',
+      fromDateStr,
+      toDateStr
+    );
+
+    const fetchedAt = await saveTransactionsToCache({
+      accountId,
+      accountName: effectiveAccountName || accountNameParam || '',
+      accountCode: effectiveAccountCode || accountCodeParam || '',
+      month,
+      year,
+      fromDate: fromDateStr,
+      toDate: toDateStr,
+      transactions,
+    });
+
     const updatedTokenSet = req.session.xeroTokenSet;
     if (updatedTokenSet && updatedTokenSet !== tokenSet) {
       req.session.xeroTokenSet = updatedTokenSet;
     }
 
     res.json({
-      transactions: transactions,
+      transactions,
       count: transactions.length,
-      month: month,
-      year: year,
-      fromDate: formatDate(fromDate),
-      toDate: formatDate(toDate),
+      month,
+      year,
+      fromDate: fromDateStr,
+      toDate: toDateStr,
+      cached: false,
+      fetchedAt,
     });
   } catch (error) {
     logger.error('Failed to fetch bank transactions', { error });
@@ -820,13 +1108,22 @@ app.get('/', (_req, res) => {
 
 // Start server
 const PORT = config.app.port;
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`, {
-    nodeEnv: config.app.nodeEnv,
-    port: PORT,
-    deployPing: `deployed-${new Date().toISOString()}`,
+
+// Initialize database and start server
+initializeDatabase()
+  .then(() => {
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`, {
+        nodeEnv: config.app.nodeEnv,
+        port: PORT,
+        deployPing: `deployed-${new Date().toISOString()}`,
+      });
+    });
+  })
+  .catch((error) => {
+    logger.error('Failed to initialize database', { error });
+    process.exit(1);
   });
-});
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (error) => {
@@ -837,5 +1134,18 @@ process.on('unhandledRejection', (error) => {
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception', { error });
   process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, closing database connections...');
+  await closeDatabaseConnection();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  logger.info('SIGINT received, closing database connections...');
+  await closeDatabaseConnection();
+  process.exit(0);
 });
 
