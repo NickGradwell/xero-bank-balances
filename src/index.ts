@@ -466,7 +466,7 @@ app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> =
     let hasMore = true;
     let consecutiveOutOfRangePages = 0;
     const maxConsecutiveOutOfRangePages = 3;
-    const maxPagesWithoutMatches = 200; // Stop after 200 pages (20,000 journals) if no matches found
+    const maxPagesWithoutMatches = 50; // Stop after 50 pages (5,000 journals) if no matches found - reduced for faster response
     let pagesWithoutMatches = 0;
     let lastTransactionCount = 0;
 
