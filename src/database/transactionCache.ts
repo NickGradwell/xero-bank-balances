@@ -1,6 +1,6 @@
 import { Pool, QueryResult } from 'pg';
 import { logger } from '../utils/logger';
-import { BankTransaction } from '../types/xero';
+import { BankTransaction, XeroTokenSet } from '../types/xero';
 
 let pool: Pool | null = null;
 
@@ -44,6 +44,21 @@ type CacheJobRow = {
   error: string | null;
   last_account_id: string | null;
   last_account_name: string | null;
+};
+
+export type AdminSettings = {
+  enabled: boolean;
+  time: string;
+  lookbackMonths: number;
+  timezone?: string | null;
+  updatedAt?: string;
+};
+
+const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
+  enabled: false,
+  time: '02:00',
+  lookbackMonths: 1,
+  timezone: null,
 };
 
 function mapJobRow(row: CacheJobRow): CacheJobStatus {
@@ -128,6 +143,29 @@ export async function initTransactionCache(): Promise<void> {
 
     await database.query(`
       CREATE INDEX IF NOT EXISTS idx_cache_jobs_month_year ON cache_jobs (year DESC, month DESC, started_at DESC);
+    `);
+
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS admin_settings (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        time TEXT NOT NULL DEFAULT '02:00',
+        lookback_months INTEGER NOT NULL DEFAULT 1,
+        timezone TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS xero_tokens (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        access_token TEXT,
+        refresh_token TEXT,
+        expires_at BIGINT,
+        token_type TEXT,
+        xero_tenant_id TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
     logger.info('Initialized transaction cache database tables');
@@ -387,11 +425,11 @@ export async function completeCacheJob(jobId: string): Promise<void> {
        SET status = 'succeeded',
            completed_at = NOW(),
            updated_at = NOW()
-       WHERE job_id = $1`
-      , [jobId]
+       WHERE job_id = $1`,
+      [jobId]
     );
   } catch (error) {
-    logger.error('Failed to mark cache job as completed', { error, jobId });
+    logger.error('Failed to complete cache job', { error, jobId });
   }
 }
 
@@ -406,8 +444,8 @@ export async function failCacheJob(params: { jobId: string; errorMessage: string
            error = $2,
            updated_at = NOW(),
            completed_at = NOW()
-       WHERE job_id = $1`
-      , [jobId, errorMessage.substring(0, 1000)]
+       WHERE job_id = $1`,
+      [jobId, errorMessage.substring(0, 1000)]
     );
   } catch (error) {
     logger.error('Failed to mark cache job as failed', { error, jobId, errorMessage });
@@ -419,8 +457,8 @@ export async function getCacheJobById(jobId: string): Promise<CacheJobStatus | n
 
   try {
     const result: QueryResult<CacheJobRow> = await database.query(
-      `SELECT * FROM cache_jobs WHERE job_id = $1`
-      , [jobId]
+      `SELECT * FROM cache_jobs WHERE job_id = $1`,
+      [jobId]
     );
 
     if (result.rows.length === 0) {
@@ -447,8 +485,8 @@ export async function getLatestCacheJob(params: {
        FROM cache_jobs
        WHERE month = $1 AND year = $2
        ORDER BY started_at DESC NULLS LAST, updated_at DESC
-       LIMIT 1`
-      , [month, year]
+       LIMIT 1`,
+      [month, year]
     );
 
     if (result.rows.length === 0) {
@@ -462,7 +500,151 @@ export async function getLatestCacheJob(params: {
   }
 }
 
-// Graceful shutdown: close the pool when the application exits
+export async function getAdminSettings(): Promise<AdminSettings> {
+  const database = getPool();
+
+  try {
+    const result = await database.query<{
+      enabled: boolean;
+      time: string;
+      lookback_months: number;
+      timezone: string | null;
+      updated_at: Date;
+    }>(
+      `SELECT enabled, time, lookback_months, timezone, updated_at FROM admin_settings WHERE id = 1`
+    );
+
+    if (result.rows.length === 0) {
+      return { ...DEFAULT_ADMIN_SETTINGS };
+    }
+
+    const row = result.rows[0];
+    return {
+      enabled: row.enabled,
+      time: row.time || DEFAULT_ADMIN_SETTINGS.time,
+      lookbackMonths: row.lookback_months || DEFAULT_ADMIN_SETTINGS.lookbackMonths,
+      timezone: row.timezone,
+      updatedAt: row.updated_at.toISOString(),
+    };
+  } catch (error) {
+    logger.error('Failed to load admin settings', { error });
+    return { ...DEFAULT_ADMIN_SETTINGS };
+  }
+}
+
+export async function saveAdminSettings(settings: AdminSettings): Promise<AdminSettings> {
+  const database = getPool();
+
+  try {
+    const result = await database.query<{
+      enabled: boolean;
+      time: string;
+      lookback_months: number;
+      timezone: string | null;
+      updated_at: Date;
+    }>(
+      `INSERT INTO admin_settings (id, enabled, time, lookback_months, timezone, updated_at)
+       VALUES (1, $1, $2, $3, $4, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         enabled = EXCLUDED.enabled,
+         time = EXCLUDED.time,
+         lookback_months = EXCLUDED.lookback_months,
+         timezone = EXCLUDED.timezone,
+         updated_at = NOW()
+       RETURNING enabled, time, lookback_months, timezone, updated_at`,
+      [settings.enabled, settings.time, settings.lookbackMonths, settings.timezone ?? null]
+    );
+
+    const row = result.rows[0];
+    return {
+      enabled: row.enabled,
+      time: row.time || DEFAULT_ADMIN_SETTINGS.time,
+      lookbackMonths: row.lookback_months || DEFAULT_ADMIN_SETTINGS.lookbackMonths,
+      timezone: row.timezone,
+      updatedAt: row.updated_at.toISOString(),
+    };
+  } catch (error) {
+    logger.error('Failed to save admin settings', { error, settings });
+    throw error;
+  }
+}
+
+export async function getStoredTokenSet(): Promise<XeroTokenSet | null> {
+  const database = getPool();
+
+  try {
+    const result = await database.query<{
+      access_token: string | null;
+      refresh_token: string | null;
+      expires_at: number | null;
+      token_type: string | null;
+      xero_tenant_id: string | null;
+    }>(`SELECT access_token, refresh_token, expires_at, token_type, xero_tenant_id FROM xero_tokens WHERE id = 1`);
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const row = result.rows[0];
+    if (!row.access_token || !row.refresh_token || !row.xero_tenant_id) {
+      return null;
+    }
+
+    return {
+      access_token: row.access_token,
+      refresh_token: row.refresh_token,
+      expires_at: row.expires_at ?? 0,
+      token_type: row.token_type || 'Bearer',
+      xero_tenant_id: row.xero_tenant_id,
+    };
+  } catch (error) {
+    logger.error('Failed to load stored token set', { error });
+    return null;
+  }
+}
+
+export async function getRecentCacheJobs(limit: number): Promise<CacheJobStatus[]> {
+  const database = getPool();
+
+  try {
+    const result: QueryResult<CacheJobRow> = await database.query(
+      `SELECT * FROM cache_jobs ORDER BY updated_at DESC LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map(mapJobRow);
+  } catch (error) {
+    logger.error('Failed to load recent cache jobs', { error, limit });
+    return [];
+  }
+}
+
+export async function storeTokenSet(tokenSet: XeroTokenSet): Promise<void> {
+  const database = getPool();
+
+  try {
+    await database.query(
+      `INSERT INTO xero_tokens (id, access_token, refresh_token, expires_at, token_type, xero_tenant_id, updated_at)
+       VALUES (1, $1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         access_token = EXCLUDED.access_token,
+         refresh_token = EXCLUDED.refresh_token,
+         expires_at = EXCLUDED.expires_at,
+         token_type = EXCLUDED.token_type,
+         xero_tenant_id = EXCLUDED.xero_tenant_id,
+         updated_at = NOW()` ,
+      [
+        tokenSet.access_token,
+        tokenSet.refresh_token,
+        tokenSet.expires_at,
+        tokenSet.token_type,
+        tokenSet.xero_tenant_id,
+      ]
+    );
+  } catch (error) {
+    logger.error('Failed to persist Xero token set', { error });
+  }
+}
+
 export async function closeDatabaseConnection(): Promise<void> {
   if (pool) {
     await pool.end();

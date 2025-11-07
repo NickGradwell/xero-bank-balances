@@ -2,6 +2,7 @@ import { XeroClient } from 'xero-node';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { XeroTokenSet } from '../../types/xero';
+import { storeTokenSet } from '../../database/transactionCache';
 
 let xeroClient: XeroClient | null = null;
 
@@ -71,13 +72,17 @@ export async function exchangeCodeForToken(
       hasRefreshToken: !!tokenSet.refresh_token,
     });
 
-    return {
+    const tokenData: XeroTokenSet = {
       access_token: tokenSet.access_token || '',
       refresh_token: tokenSet.refresh_token || '',
       expires_at: tokenSet.expires_at || 0,
       token_type: tokenSet.token_type || 'Bearer',
       xero_tenant_id: tenantId,
     };
+
+    await setTokenSet(tokenData);
+
+    return tokenData;
   } catch (error) {
     // Log the full error details
     const errorDetails: any = {
@@ -149,13 +154,17 @@ export async function refreshAccessToken(refreshToken: string, tenantId?: string
 
     logger.info('Successfully refreshed access token', { tenantId: updatedTenantId });
 
-    return {
+    const refreshed: XeroTokenSet = {
       access_token: tokenSet.access_token || '',
       refresh_token: tokenSet.refresh_token || '',
       expires_at: tokenSet.expires_at || 0,
       token_type: tokenSet.token_type || 'Bearer',
       xero_tenant_id: updatedTenantId,
     };
+
+    await setTokenSet(refreshed);
+
+    return refreshed;
   } catch (error) {
     const errorDetails: any = {
       message: error instanceof Error ? error.message : String(error),
@@ -177,6 +186,8 @@ export async function refreshAccessToken(refreshToken: string, tenantId?: string
 }
 
 export async function setTokenSet(tokenSet: XeroTokenSet): Promise<void> {
+  await storeTokenSet(tokenSet);
+
   const client = getXeroClient();
   client.setTokenSet({
     access_token: tokenSet.access_token,

@@ -21,28 +21,10 @@
                     <p class="text-gray-600 mt-1">View all connected bank account balances</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <button id="cacheOctoberBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                        <i class="fas fa-cloud-download-alt mr-1"></i>Cache Oct 2025
-                    </button>
-                    <button id="october2025Btn" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                        <i class="fas fa-calendar mr-1"></i>October 2025 Transactions
-                    </button>
-                    <button id="hundredTransactionsBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                        <i class="fas fa-list-ol mr-1"></i>100 Transactions
-                    </button>
-                    <button id="allTransactionsBtn" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                        <i class="fas fa-list mr-1"></i>All Transactions
+                    <button id="adminBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                        <i class="fas fa-cog mr-1"></i>Admin
                     </button>
                     <div id="authSection"><!-- Will be populated by JavaScript --></div>
-                </div>
-                <div id="cacheStatus" class="hidden mt-4 px-4 py-3 rounded-lg text-sm flex flex-col gap-1 border">
-                    <div class="flex items-center gap-2">
-                        <i id="cacheStatusIcon" class="fas fa-info-circle text-base"></i>
-                        <span id="cacheStatusText" class="font-medium"></span>
-                    </div>
-                    <div id="cacheStatusProgress" class="text-xs"></div>
-                    <div id="cacheStatusMeta" class="text-xs"></div>
-                    <div id="cacheStatusError" class="hidden text-xs"></div>
                 </div>
             </div>
         </div>
@@ -115,34 +97,25 @@
 
                 <!-- Date Selector -->
                 <div class="p-6 border-b border-gray-200 bg-gray-50">
-                    <div class="flex items-center gap-4 flex-wrap">
-                        <div class="flex items-center gap-2">
-                            <label class="text-sm font-medium text-gray-700">Month:</label>
-                            <select id="monthSelect" onchange="onDateChange()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="1">January</option>
-                                <option value="2">February</option>
-                                <option value="3">March</option>
-                                <option value="4">April</option>
-                                <option value="5">May</option>
-                                <option value="6">June</option>
-                                <option value="7">July</option>
-                                <option value="8">August</option>
-                                <option value="9">September</option>
-                                <option value="10">October</option>
-                                <option value="11">November</option>
-                                <option value="12">December</option>
-                            </select>
+                    <div class="flex flex-col md:flex-row gap-4 md:items-end">
+                        <div class="flex flex-col">
+                            <label for="rangeStart" class="text-sm font-medium text-gray-700 mb-1">From month</label>
+                            <input type="month" id="rangeStart" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                         </div>
-                        <div class="flex items-center gap-2">
-                            <label class="text-sm font-medium text-gray-700">Year:</label>
-                            <select id="yearSelect" onchange="onDateChange()" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <!-- Years will be populated by JavaScript -->
-                            </select>
+                        <div class="flex flex-col">
+                            <label for="rangeEnd" class="text-sm font-medium text-gray-700 mb-1">To month</label>
+                            <input type="month" id="rangeEnd" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                         </div>
-                        <button onclick="setCurrentMonth()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                            <i class="fas fa-calendar-alt mr-1"></i>Current Month
-                        </button>
+                        <div class="flex gap-2">
+                            <button id="applyRangeBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                <i class="fas fa-sync-alt mr-1"></i>Apply Range
+                            </button>
+                            <button id="resetRangeBtn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg text-sm transition-colors">
+                                <i class="fas fa-history mr-1"></i>Last 12 Months
+                            </button>
+                        </div>
                     </div>
+                    <p id="transactionsRangeSummary" class="mt-3 text-sm text-gray-600"></p>
                 </div>
 
                 <!-- Transactions Content -->
@@ -167,7 +140,8 @@
                     <!-- Transactions Table -->
                     <div id="transactionsContainer" class="hidden">
                         <div class="mb-4 text-sm text-gray-600">
-                            <span id="transactionsCount">0</span> transactions found
+                            <div><span id="transactionsCount">0</span> transactions found</div>
+                            <div id="transactionsCountPeriod" class="text-xs text-gray-500"></div>
                         </div>
                         <div class="overflow-x-auto">
                             <table class="min-w-full divide-y divide-gray-200">
@@ -198,424 +172,319 @@
             </div>
         </div>
 
-        <!-- 100 Transactions Modal -->
-        <div id="hundredTransactionsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <!-- Admin Modal -->
+        <div id="adminModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
                 <div class="flex items-center justify-between p-6 border-b border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-800">100 Transactions (Any Account)</h2>
-                    <button onclick="closeHundredTransactionsModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <div>
+                        <h2 class="text-2xl font-semibold text-gray-800">Admin Panel</h2>
+                        <p class="text-sm text-gray-500">Manage automated sync and run manual updates</p>
+                    </div>
+                    <button onclick="closeAdminModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
                         <i class="fas fa-times text-2xl"></i>
                     </button>
                 </div>
-                <div class="p-4 bg-gray-50 border-b border-gray-200 text-sm text-gray-600">
-                    Showing the first 100 journal entries from Journals endpoint (unfiltered). Each journal may have multiple lines. Use this to see what account IDs/names/codes are present in journals.
-                </div>
-                <div class="flex-1 overflow-y-auto p-6">
-                    <div id="hundredTransactionsLoading" class="hidden text-center py-12">
-                        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
-                        <p class="text-gray-600">Loading transactions...</p>
+                <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 flex items-center justify-center">
+                        <img src="/images/admin-panel.png" alt="Admin overview" class="max-h-56 w-full object-contain rounded-md">
                     </div>
-                    <div id="hundredTransactionsError" class="hidden text-center py-4 text-red-600"></div>
-                    <div id="hundredTransactionsContainer" class="hidden">
-                        <div class="overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Journal #</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Name</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account ID</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Code</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="hundredTransactionsTable" class="bg-white divide-y divide-gray-200">
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- October 2025 Transactions Modal -->
-        <div id="october2025Modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl max-w-7xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-                <div class="flex items-center justify-between p-6 border-b border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-800">October 2025 Transactions</h2>
-                    <button onclick="closeOctober2025Modal()" class="text-gray-400 hover:text-gray-600 transition-colors">
-                        <i class="fas fa-times text-2xl"></i>
-                    </button>
-                </div>
-                <div class="p-4 bg-gray-50 border-b border-gray-200">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-4">
-                            <button onclick="selectPropertiesOnly()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                                <i class="fas fa-filter mr-1"></i>Properties Only
-                            </button>
-                            <button onclick="clearAccountFilters()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition-colors">
-                                <i class="fas fa-times mr-1"></i>Clear Filters
-                            </button>
-                            <span id="october2025FilterCount" class="text-sm text-gray-600">0 accounts selected</span>
-                        </div>
-                        <span id="october2025TransactionCount" class="text-sm font-medium text-gray-700">0 transactions</span>
-                    </div>
-                    <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg bg-white p-3">
-                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2" id="october2025AccountFilters">
-                            <!-- Account checkboxes will be populated here -->
-                        </div>
-                    </div>
-                </div>
-                <div class="flex-1 overflow-y-auto p-6">
-                    <div id="october2025Loading" class="hidden text-center py-12">
-                        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
-                        <p class="text-gray-600">Loading October 2025 transactions...</p>
-                    </div>
-                    <div id="october2025Error" class="hidden text-center py-4 text-red-600"></div>
-                    <div id="october2025Container" class="hidden">
-                        <div class="overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Journal #</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Name</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Code</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="october2025Table" class="bg-white divide-y divide-gray-200">
-                                </tbody>
-                            </table>
-                        </div>
-                        <!-- Pagination Controls -->
-                        <div class="mt-4 flex items-center justify-between border-t border-gray-200 pt-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <section class="border border-gray-200 rounded-lg p-4 space-y-4">
+                            <header>
+                                <h3 class="text-lg font-semibold text-gray-800">Nightly Sync Schedule</h3>
+                                <p class="text-sm text-gray-500">Configure automatic overnight sync jobs.</p>
+                            </header>
                             <div class="flex items-center gap-2">
-                                <button id="october2025PrevBtn" onclick="changeOctober2025Page(-1)" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
-                                    <i class="fas fa-chevron-left mr-1"></i>Previous
+                                <input type="checkbox" id="nightlySyncEnabled" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                                <label for="nightlySyncEnabled" class="text-sm text-gray-700">Enable nightly sync</label>
+                            </div>
+                            <div class="grid grid-cols-1 gap-4">
+                                <label class="flex flex-col text-sm text-gray-700">
+                                    Sync time (24h)
+                                    <input type="time" id="nightlySyncTime" value="02:00" class="mt-1 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                </label>
+                                <label class="flex flex-col text-sm text-gray-700">
+                                    Lookback period
+                                    <select id="nightlySyncLookback" class="mt-1 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <option value="1">Last 1 month</option>
+                                        <option value="2">Last 2 months</option>
+                                        <option value="3">Last 3 months</option>
+                                        <option value="6">Last 6 months</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <button id="saveNightlySyncBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                    <i class="fas fa-save mr-1"></i>Save schedule
                                 </button>
-                                <span id="october2025PageInfo" class="text-sm text-gray-700 px-4">
-                                    Page <span id="october2025CurrentPage">1</span> of <span id="october2025TotalPages">1</span>
-                                </span>
-                                <button id="october2025NextBtn" onclick="changeOctober2025Page(1)" class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
-                                    Next<i class="fas fa-chevron-right ml-1"></i>
+                                <button id="runNightlySyncBtn" class="text-sm text-indigo-600 hover:text-indigo-700">
+                                    Run now
                                 </button>
                             </div>
-                            <div class="text-sm text-gray-600">
-                                Showing <span id="october2025ShowingFrom">1</span>-<span id="october2025ShowingTo">0</span> of <span id="october2025TotalTransactions">0</span> transactions
+                            <p id="nightlySyncStatus" class="text-xs text-gray-500"></p>
+                        </section>
+                        <section class="border border-gray-200 rounded-lg p-4 space-y-4">
+                            <header>
+                                <h3 class="text-lg font-semibold text-gray-800">Manual Sync</h3>
+                                <p class="text-sm text-gray-500">Select month(s) to sync immediately.</p>
+                            </header>
+                            <div class="border border-gray-200 rounded-lg max-h-56 overflow-y-auto p-3" id="manualSyncMonthContainer"></div>
+                            <div class="flex items-center justify-between">
+                                <button id="selectRecentMonthsBtn" class="text-sm text-indigo-600 hover:text-indigo-700">Select last 3 months</button>
+                                <button id="clearManualSelectionBtn" class="text-sm text-gray-500 hover:text-gray-600">Clear</button>
                             </div>
-                        </div>
+                            <button id="startManualSyncBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors w-full">
+                                <i class="fas fa-play mr-1"></i>Start manual sync
+                            </button>
+                            <p id="manualSyncStatus" class="text-xs text-gray-500"></p>
+                        </section>
                     </div>
+                    <section class="border border-gray-200 rounded-lg p-4">
+                        <header class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold text-gray-800">Recent Sync Jobs</h3>
+                                <p class="text-sm text-gray-500">Monitor the latest automatic and manual sync activity.</p>
+                            </div>
+                            <button id="refreshJobListBtn" class="text-sm text-indigo-600 hover:text-indigo-700">
+                                <i class="fas fa-sync-alt mr-1"></i>Refresh
+                            </button>
+                        </header>
+                        <div id="adminJobList" class="space-y-3">
+                            <p class="text-sm text-gray-500">No jobs to display.</p>
+                        </div>
+                    </section>
                 </div>
             </div>
         </div>
-
-        <!-- All Transactions Modal -->
-        <div id="allTransactionsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-            <div class="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-                <div class="flex items-center justify-between p-6 border-b border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-800">All Transactions (recent)</h2>
-                    <button onclick="closeAllTransactionsModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
-                        <i class="fas fa-times text-2xl"></i>
-                    </button>
-                </div>
-                <div class="p-4 bg-gray-50 border-b border-gray-200 text-sm text-gray-600">
-                    Showing the most recent transactions returned by Xero (first few pages). Use this to reconcile account IDs/names.
-                </div>
-                <div class="flex-1 overflow-y-auto p-6">
-                    <div id="allTransactionsLoading" class="hidden text-center py-12">
-                        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
-                        <p class="text-gray-600">Loading transactions...</p>
-                    </div>
-                    <div id="allTransactionsError" class="hidden text-center py-4 text-red-600"></div>
-                    <div id="allTransactionsContainer" class="hidden">
-                        <div class="overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account Name</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account ID</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="allTransactionsTable" class="bg-white divide-y divide-gray-200"></tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <script>
-        // Cached bank accounts for reuse in filters
-        let cachedAccounts = [];
+        const DEFAULT_NIGHTLY_TIME = '02:00';
+        const MANUAL_MONTH_COUNT = 12;
 
-        const CACHE_STATUS_MONTH = 10;
-        const CACHE_STATUS_YEAR = 2025;
-        const CACHE_STATUS_STORAGE_KEY = `cacheJobId_${CACHE_STATUS_YEAR}_${CACHE_STATUS_MONTH}`;
+        let currentAccountId = null;
+        let currentAccountName = '';
+        let currentAccountCode = '';
 
-        let cacheStatusCurrentJob = null;
-        let cacheStatusPollIntervalId = null;
-        let cacheStatusTimerIntervalId = null;
-        let cacheStatusJobId = null;
+        let adminJobPollHandle = null;
+        let adminJobIds = [];
 
-        function clearCacheStatusIntervals() {
-            if (cacheStatusPollIntervalId) {
-                clearInterval(cacheStatusPollIntervalId);
-                cacheStatusPollIntervalId = null;
-            }
-            if (cacheStatusTimerIntervalId) {
-                clearInterval(cacheStatusTimerIntervalId);
-                cacheStatusTimerIntervalId = null;
-            }
+        function formatMonthValue(date) {
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
         }
 
-        function hideCacheStatus() {
-            clearCacheStatusIntervals();
-            cacheStatusCurrentJob = null;
-            cacheStatusJobId = null;
-            const container = document.getElementById('cacheStatus');
-            if (container) {
-                container.classList.add('hidden');
+        function monthValueToDate(value, endOfMonth = false) {
+            if (!value) return null;
+            const [yearStr, monthStr] = value.split('-');
+            const year = Number(yearStr);
+            const month = Number(monthStr);
+            if (Number.isNaN(year) || Number.isNaN(month) || month < 1 || month > 12) {
+                return null;
             }
+            return endOfMonth ? new Date(year, month, 0) : new Date(year, month - 1, 1);
         }
 
-        function formatDuration(seconds) {
-            const totalSeconds = Math.max(0, Math.floor(seconds));
-            const hrs = Math.floor(totalSeconds / 3600);
-            const mins = Math.floor((totalSeconds % 3600) / 60);
-            const secs = totalSeconds % 60;
-            const parts = [
-                hrs > 0 ? String(hrs).padStart(2, '0') : '00',
-                String(mins).padStart(2, '0'),
-                String(secs).padStart(2, '0')
-            ];
-            return parts.join(':');
+        function setDefaultTransactionsRange() {
+            const startInput = document.getElementById('rangeStart');
+            const endInput = document.getElementById('rangeEnd');
+            if (!startInput || !endInput) return;
+
+            const now = new Date();
+            const endMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            const startMonth = new Date(endMonth);
+            startMonth.setMonth(startMonth.getMonth() - 11);
+
+            startInput.value = formatMonthValue(startMonth);
+            endInput.value = formatMonthValue(endMonth);
         }
 
-        function updateCacheStatusTimer() {
-            const job = cacheStatusCurrentJob;
-            const metaEl = document.getElementById('cacheStatusMeta');
-            if (!job || !metaEl) {
+        function updateTransactionsRangeSummary(rangeSummary) {
+            const summaryText = document.getElementById('transactionsRangeSummary');
+            const countPeriodText = document.getElementById('transactionsCountPeriod');
+
+            if (!rangeSummary) {
+                if (summaryText) summaryText.textContent = '';
+                if (countPeriodText) countPeriodText.textContent = '';
                 return;
             }
 
-            if (!job.startedAt) {
-                metaEl.textContent = 'Waiting to start…';
-                return;
+            const fromLabel = rangeSummary.fromDate ? new Date(rangeSummary.fromDate).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }) : '';
+            const toLabel = rangeSummary.toDate ? new Date(rangeSummary.toDate).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }) : '';
+            const monthsLabel = typeof rangeSummary.months === 'number' ? `${rangeSummary.months} month${rangeSummary.months === 1 ? '' : 's'}` : '';
+
+            const summaryParts = [];
+            if (fromLabel && toLabel) {
+                summaryParts.push(`${fromLabel} → ${toLabel}`);
+            }
+            if (monthsLabel) {
+                summaryParts.push(monthsLabel);
+            }
+            if (typeof rangeSummary.cachedMonths === 'number' || typeof rangeSummary.refreshedMonths === 'number') {
+                const freshnessParts = [];
+                if (typeof rangeSummary.cachedMonths === 'number' && rangeSummary.cachedMonths > 0) {
+                    freshnessParts.push(`${rangeSummary.cachedMonths} cached`);
+                }
+                if (typeof rangeSummary.refreshedMonths === 'number' && rangeSummary.refreshedMonths > 0) {
+                    freshnessParts.push(`${rangeSummary.refreshedMonths} refreshed`);
+                }
+                if (freshnessParts.length) {
+                    summaryParts.push(freshnessParts.join(' / '));
+                }
             }
 
-            const start = new Date(job.startedAt).getTime();
-            const end = (job.status === 'succeeded' || job.status === 'failed') && job.completedAt
-                ? new Date(job.completedAt).getTime()
-                : Date.now();
-            const elapsedSeconds = (end - start) / 1000;
-            const elapsedText = formatDuration(elapsedSeconds);
-            const updatedText = job.updatedAt
-                ? new Date(job.updatedAt).toLocaleTimeString('en-GB', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: false,
-                })
-                : '';
-
-            let metaText = `Elapsed: ${elapsedText}`;
-            if (updatedText) {
-                metaText += ` · Last update: ${updatedText}`;
+            if (summaryText) {
+                summaryText.textContent = summaryParts.length ? `Range: ${summaryParts.join(' · ')}` : '';
             }
-            metaEl.textContent = metaText;
+
+            if (countPeriodText) {
+                countPeriodText.textContent = summaryParts.length ? summaryParts.join(' · ') : '';
+            }
         }
 
-        function updateCacheStatusUI(job) {
-            cacheStatusCurrentJob = job;
+        function showTransactions(accountId, accountName, accountCode) {
+            currentAccountId = accountId;
+            currentAccountName = accountName;
+            currentAccountCode = accountCode;
 
-            const container = document.getElementById('cacheStatus');
-            const iconEl = document.getElementById('cacheStatusIcon');
-            const textEl = document.getElementById('cacheStatusText');
-            const progressEl = document.getElementById('cacheStatusProgress');
-            const errorEl = document.getElementById('cacheStatusError');
+            const nameEl = document.getElementById('modalAccountName');
+            const codeEl = document.getElementById('modalAccountCode');
+            if (nameEl) nameEl.textContent = accountName;
+            if (codeEl) codeEl.textContent = `Account Code: ${accountCode || 'N/A'}`;
 
-            if (!container || !iconEl || !textEl || !progressEl || !errorEl) {
+            setDefaultTransactionsRange();
+
+            const modal = document.getElementById('transactionsModal');
+            if (modal) {
+                modal.classList.remove('hidden');
+            }
+
+            loadTransactions();
+        }
+
+        function closeTransactionsModal() {
+            const modal = document.getElementById('transactionsModal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+            currentAccountId = null;
+        }
+
+        async function loadTransactions() {
+            if (!currentAccountId) return;
+
+            const startInput = document.getElementById('rangeStart');
+            const endInput = document.getElementById('rangeEnd');
+            const errorState = document.getElementById('transactionsError');
+            const errorMessage = document.getElementById('transactionsErrorMessage');
+            const loadingState = document.getElementById('transactionsLoading');
+            const transactionsContainer = document.getElementById('transactionsContainer');
+            const noTransactionsState = document.getElementById('noTransactionsState');
+
+            if (!startInput || !endInput) {
                 return;
             }
 
-            const statusClasses = {
-                pending: 'bg-blue-50 border-blue-200 text-blue-700',
-                running: 'bg-blue-50 border-blue-200 text-blue-700',
-                succeeded: 'bg-green-50 border-green-200 text-green-700',
-                failed: 'bg-red-50 border-red-200 text-red-700',
+            const startValue = startInput.value;
+            const endValue = endInput.value;
+
+            const showLoading = () => {
+                if (loadingState) loadingState.classList.remove('hidden');
+                if (transactionsContainer) transactionsContainer.classList.add('hidden');
+                if (noTransactionsState) noTransactionsState.classList.add('hidden');
+                if (errorState) errorState.classList.add('hidden');
             };
 
-            container.className = `hidden mt-4 px-4 py-3 rounded-lg text-sm flex flex-col gap-1 border ${statusClasses[job.status] || statusClasses.pending}`;
-            container.classList.remove('hidden');
+            if (!startValue || !endValue) {
+                showLoading();
+                if (loadingState) loadingState.classList.add('hidden');
+                if (errorState) errorState.classList.remove('hidden');
+                if (errorMessage) errorMessage.textContent = 'Please select both start and end months.';
+                return;
+            }
 
-            let iconClass = 'fas fa-info-circle text-base';
-            let message = 'Preparing cache job…';
+            if (startValue > endValue) {
+                showLoading();
+                if (loadingState) loadingState.classList.add('hidden');
+                if (errorState) errorState.classList.remove('hidden');
+                if (errorMessage) errorMessage.textContent = 'Start month must be before or the same as end month.';
+                return;
+            }
 
-            if (job.status === 'pending') {
-                iconClass = 'fas fa-hourglass-half text-base';
-                message = 'Preparing October 2025 cache job…';
-            } else if (job.status === 'running') {
-                iconClass = 'fas fa-spinner fa-spin text-base';
-                const total = job.totalAccounts || 0;
-                const processed = job.processedAccounts || 0;
-                if (total > 0) {
-                    const percent = Math.min(100, Math.round((processed / total) * 100));
-                    message = `Caching October 2025: ${processed} of ${total} accounts (${percent}%)`;
+            const fromDate = monthValueToDate(startValue, false);
+            const toDate = monthValueToDate(endValue, true);
+
+            if (!fromDate || !toDate) {
+                showLoading();
+                if (loadingState) loadingState.classList.add('hidden');
+                if (errorState) errorState.classList.remove('hidden');
+                if (errorMessage) errorMessage.textContent = 'Unable to parse the selected months. Please try again.';
+                return;
+            }
+
+            showLoading();
+            updateTransactionsRangeSummary({ fromDate: fromDate.toISOString(), toDate: toDate.toISOString(), months: null });
+
+            try {
+                const params = new URLSearchParams({
+                    fromDate: fromDate.toISOString().split('T')[0],
+                    toDate: toDate.toISOString().split('T')[0],
+                    accountName: currentAccountName || '',
+                    accountCode: currentAccountCode || '',
+                });
+
+                const response = await fetch(`/api/xero/accounts/${currentAccountId}/transactions?${params.toString()}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.message || 'Failed to fetch transactions');
+                }
+
+                if (loadingState) loadingState.classList.add('hidden');
+
+                if (Array.isArray(data.transactions) && data.transactions.length > 0) {
+                    displayTransactions(data.transactions);
+                    const countEl = document.getElementById('transactionsCount');
+                    if (countEl) countEl.textContent = data.count;
+                    updateTransactionsRangeSummary(data.range || { fromDate: data.fromDate, toDate: data.toDate, months: data.range?.months });
+                    if (transactionsContainer) transactionsContainer.classList.remove('hidden');
                 } else {
-                    message = `Caching October 2025: ${processed} accounts processed`;
+                    updateTransactionsRangeSummary(data.range || { fromDate: data.fromDate, toDate: data.toDate, months: data.range?.months });
+                    if (noTransactionsState) noTransactionsState.classList.remove('hidden');
                 }
-            } else if (job.status === 'succeeded') {
-                iconClass = 'fas fa-check-circle text-base';
-                const total = job.totalAccounts || job.processedAccounts || 0;
-                message = `Caching complete for October 2025${total ? ` (${job.processedAccounts}/${total} accounts)` : ''}`;
-            } else if (job.status === 'failed') {
-                iconClass = 'fas fa-exclamation-triangle text-base';
-                message = 'October 2025 cache job failed';
-            }
-
-            iconEl.className = iconClass;
-            textEl.textContent = message;
-
-            const total = job.totalAccounts || 0;
-            const processed = job.processedAccounts || 0;
-            let progressText = '';
-            if (job.status === 'pending') {
-                progressText = 'Accounts: calculating…';
-            } else if (total > 0) {
-                const percent = Math.min(100, Math.round((processed / total) * 100));
-                progressText = `Accounts: ${processed} / ${total} (${percent}%)`;
-            } else if (processed > 0) {
-                progressText = `Accounts processed: ${processed}`;
-            }
-
-            if (job.lastAccountName) {
-                progressText += progressText ? ` · Last: ${job.lastAccountName}` : `Last account: ${job.lastAccountName}`;
-            }
-
-            progressEl.textContent = progressText;
-            progressEl.classList.toggle('hidden', !progressText);
-
-            if (job.status === 'failed' && job.error) {
-                errorEl.textContent = `Error: ${job.error}`;
-                errorEl.classList.remove('hidden');
-            } else {
-                errorEl.textContent = '';
-                errorEl.classList.add('hidden');
-            }
-
-            updateCacheStatusTimer();
-        }
-
-        async function fetchCacheJobById(jobId) {
-            try {
-                const response = await fetch(`/api/xero/cache/job/${jobId}`);
-                if (response.status === 404) {
-                    return null;
-                }
-                if (!response.ok) {
-                    throw new Error('Failed to fetch cache job');
-                }
-                const data = await response.json();
-                return data.job || null;
             } catch (error) {
-                console.warn('Failed to fetch cache job by id', error);
-                return null;
+                console.error('Error loading transactions', error);
+                if (loadingState) loadingState.classList.add('hidden');
+                if (errorState) errorState.classList.remove('hidden');
+                if (errorMessage) errorMessage.textContent = error instanceof Error ? error.message : 'Failed to load transactions. Please try again.';
             }
         }
 
-        async function fetchLatestCacheJob(month, year) {
-            try {
-                const response = await fetch(`/api/xero/cache/month/status?month=${month}&year=${year}`);
-                if (!response.ok) {
-                    return null;
-                }
-                const data = await response.json();
-                return data.job || null;
-            } catch (error) {
-                console.warn('Failed to fetch latest cache job', error);
-                return null;
-            }
+        function displayTransactions(transactions) {
+            const tbody = document.getElementById('transactionsTableBody');
+            if (!tbody) return;
+
+            tbody.innerHTML = transactions.map(tx => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${formatTransactionDate(tx.date)}</td>
+                    <td class="px-6 py-4 text-sm text-gray-900">${escapeHtml(tx.description)}</td>
+                    <td class="px-6 py-4 text-sm text-gray-500">${tx.reference ? escapeHtml(tx.reference) : '-'}</td>
+                    <td class="px-6 py-4 text-sm text-gray-500">${tx.contactName ? escapeHtml(tx.contactName) : '-'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${tx.amountFormatted}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${tx.isReconciled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                            ${tx.isReconciled ? 'Reconciled' : 'Unreconciled'}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
         }
 
-        async function initializeCacheStatusMonitoring() {
-            const storedJobId = localStorage.getItem(CACHE_STATUS_STORAGE_KEY);
-            if (storedJobId) {
-                const storedJob = await fetchCacheJobById(storedJobId);
-                if (storedJob) {
-                    startCacheStatusTracking(storedJob);
-                    return;
-                }
-                localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
-            }
-
-            const latestJob = await fetchLatestCacheJob(CACHE_STATUS_MONTH, CACHE_STATUS_YEAR);
-            if (latestJob) {
-                startCacheStatusTracking(latestJob);
-            } else {
-                hideCacheStatus();
-            }
+        function formatTransactionDate(dateString) {
+            if (!dateString) return '-';
+            const date = new Date(dateString);
+            if (Number.isNaN(date.getTime())) return '-';
+            return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
         }
 
-        function startCacheStatusTracking(job) {
-            if (!job) {
-                hideCacheStatus();
-                return;
-            }
-
-            clearCacheStatusIntervals();
-            cacheStatusJobId = job.jobId;
-
-            if (job.status === 'pending' || job.status === 'running') {
-                localStorage.setItem(CACHE_STATUS_STORAGE_KEY, job.jobId);
-            } else {
-                localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
-            }
-
-            updateCacheStatusUI(job);
-
-            if (job.status === 'succeeded' || job.status === 'failed') {
-                return;
-            }
-
-            cacheStatusTimerIntervalId = setInterval(updateCacheStatusTimer, 1000);
-
-            cacheStatusPollIntervalId = setInterval(async () => {
-                if (!cacheStatusJobId) {
-                    clearCacheStatusIntervals();
-                    return;
-                }
-                const latest = await fetchCacheJobById(cacheStatusJobId);
-                if (!latest) {
-                    clearCacheStatusIntervals();
-                    hideCacheStatus();
-                    localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
-                    return;
-                }
-
-                updateCacheStatusUI(latest);
-
-                if (latest.status === 'succeeded' || latest.status === 'failed') {
-                    clearCacheStatusIntervals();
-                    localStorage.removeItem(CACHE_STATUS_STORAGE_KEY);
-                }
-            }, 5000);
-        }
-
-        // Check authentication status on page load
         async function checkAuthStatus() {
             try {
                 const response = await fetch('/api/auth/status');
@@ -627,7 +496,6 @@
             }
         }
 
-        // Load bank accounts
         async function loadBankAccounts() {
             const loadingState = document.getElementById('loadingState');
             const accountsContainer = document.getElementById('accountsContainer');
@@ -635,18 +503,16 @@
             const errorState = document.getElementById('errorState');
             const errorMessage = document.getElementById('errorMessage');
 
-            // Hide all states
-            loadingState.classList.remove('hidden');
-            accountsContainer.classList.add('hidden');
-            noAccountsState.classList.add('hidden');
-            errorState.classList.add('hidden');
+            if (loadingState) loadingState.classList.remove('hidden');
+            if (accountsContainer) accountsContainer.classList.add('hidden');
+            if (noAccountsState) noAccountsState.classList.add('hidden');
+            if (errorState) errorState.classList.add('hidden');
 
             try {
                 const response = await fetch('/api/xero/accounts');
                 const data = await response.json();
 
                 if (response.status === 401) {
-                    // Not authenticated
                     showNotAuthenticatedState();
                     return;
                 }
@@ -655,29 +521,28 @@
                     throw new Error(data.message || 'Failed to fetch bank accounts');
                 }
 
-                loadingState.classList.add('hidden');
+                if (loadingState) loadingState.classList.add('hidden');
 
-                if (data.accounts && data.accounts.length > 0) {
+                if (Array.isArray(data.accounts) && data.accounts.length > 0) {
                     displayBankAccounts(data.accounts);
-                    accountsContainer.classList.remove('hidden');
-                } else {
+                    if (accountsContainer) accountsContainer.classList.remove('hidden');
+                } else if (noAccountsState) {
                     noAccountsState.classList.remove('hidden');
                 }
             } catch (error) {
                 console.error('Error loading bank accounts', error);
-                loadingState.classList.add('hidden');
-                errorState.classList.remove('hidden');
-                errorMessage.textContent = error.message || 'Failed to load bank accounts. Please try again.';
+                if (loadingState) loadingState.classList.add('hidden');
+                if (errorState) errorState.classList.remove('hidden');
+                if (errorMessage) errorMessage.textContent = error instanceof Error ? error.message : 'Failed to load bank accounts. Please try again.';
             }
         }
 
-        // Display bank accounts
         function displayBankAccounts(accounts) {
             const grid = document.getElementById('accountsGrid');
             const countElement = document.getElementById('accountsCount');
-            
+            if (!grid || !countElement) return;
+
             countElement.textContent = accounts.length;
-            cachedAccounts = accounts;
 
             grid.innerHTML = accounts.map(account => `
                 <div onclick="showTransactions('${escapeHtml(account.accountId)}', '${escapeHtml(account.name)}', '${escapeHtml(account.code)}')" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow cursor-pointer">
@@ -688,26 +553,17 @@
                             </div>
                             <div>
                                 <h3 class="text-lg font-semibold text-gray-800">${escapeHtml(account.name)}</h3>
-                                <p class="text-sm text-gray-500">${escapeHtml(account.code)}</p>
+                                <p class="text-sm text-gray-500">${escapeHtml(account.code || 'N/A')}</p>
                             </div>
                         </div>
-                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${
-                            account.status === 'ACTIVE' 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-gray-100 text-gray-800'
-                        }">
-                            ${account.status}
+                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${account.status === 'ACTIVE' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                            ${escapeHtml(account.status || 'UNKNOWN')}
                         </span>
                     </div>
-                    
                     <div class="border-t border-gray-200 pt-4">
                         <div class="flex items-baseline justify-between mb-2">
                             <span class="text-sm text-gray-600">Balance</span>
-                            <span class="text-2xl font-bold ${
-                                account.balance >= 0 ? 'text-green-600' : 'text-red-600'
-                            }">
-                                ${account.balanceFormatted}
-                            </span>
+                            <span class="text-2xl font-bold ${account.balance >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(account.balanceFormatted || account.balance?.toString() || '£0.00')}</span>
                         </div>
                         ${account.bankAccountNumber ? `
                             <div class="text-xs text-gray-500 mt-2">
@@ -717,7 +573,7 @@
                         ` : ''}
                         <div class="text-xs text-gray-500 mt-2">
                             <i class="fas fa-coins mr-1"></i>
-                            ${escapeHtml(account.currencyCode)}
+                            ${escapeHtml(account.currencyCode || 'GBP')}
                         </div>
                         <div class="text-xs text-blue-600 mt-3 font-medium">
                             <i class="fas fa-eye mr-1"></i>Click to view transactions
@@ -727,18 +583,23 @@
             `).join('');
         }
 
-        // Show not authenticated state
         function showNotAuthenticatedState() {
-            document.getElementById('loadingState').classList.add('hidden');
-            document.getElementById('accountsContainer').classList.add('hidden');
-            document.getElementById('noAccountsState').classList.add('hidden');
-            document.getElementById('errorState').classList.add('hidden');
-            document.getElementById('notAuthenticatedState').classList.remove('hidden');
+            const loading = document.getElementById('loadingState');
+            const accounts = document.getElementById('accountsContainer');
+            const noAccounts = document.getElementById('noAccountsState');
+            const error = document.getElementById('errorState');
+            const notAuth = document.getElementById('notAuthenticatedState');
+
+            if (loading) loading.classList.add('hidden');
+            if (accounts) accounts.classList.add('hidden');
+            if (noAccounts) noAccounts.classList.add('hidden');
+            if (error) error.classList.add('hidden');
+            if (notAuth) notAuth.classList.remove('hidden');
         }
 
-        // Update auth section in header
         async function updateAuthSection() {
             const authSection = document.getElementById('authSection');
+            if (!authSection) return;
             const isAuthenticated = await checkAuthStatus();
 
             if (isAuthenticated) {
@@ -756,19 +617,15 @@
             }
         }
 
-        // Escape HTML to prevent XSS
         function escapeHtml(text) {
             const div = document.createElement('div');
-            div.textContent = text;
+            div.textContent = text ?? '';
             return div.innerHTML;
         }
 
-        // Logout function
         async function logout() {
             try {
-                const response = await fetch('/auth/logout', {
-                    method: 'POST',
-                });
+                const response = await fetch('/auth/logout', { method: 'POST' });
                 if (response.ok || response.redirected) {
                     window.location.reload();
                 }
@@ -778,657 +635,440 @@
             }
         }
 
-        // Transactions modal state
-        let currentAccountId = null;
-        let currentAccountName = '';
-        let currentAccountCode = '';
-
-        // Initialize year dropdown
-        function initializeYearDropdown() {
-            const yearSelect = document.getElementById('yearSelect');
-            const currentYear = new Date().getFullYear();
-            const startYear = 2020;
-            const endYear = currentYear + 5;
-            
-            yearSelect.innerHTML = '';
-            for (let year = endYear; year >= startYear; year--) {
-                const option = document.createElement('option');
-                option.value = year;
-                option.textContent = year;
-                if (year === currentYear) {
-                    option.selected = true;
-                }
-                yearSelect.appendChild(option);
-            }
+        function openAdminModal() {
+            const modal = document.getElementById('adminModal');
+            if (!modal) return;
+            populateManualSyncMonths();
+            loadAdminSettings();
+            refreshJobList();
+            modal.classList.remove('hidden');
         }
 
-        // Set month/year to current month
-        function setCurrentMonth() {
+        function closeAdminModal() {
+            const modal = document.getElementById('adminModal');
+            if (modal) modal.classList.add('hidden');
+            stopJobPolling();
+        }
+
+        function populateManualSyncMonths() {
+            const container = document.getElementById('manualSyncMonthContainer');
+            if (!container) return;
+
             const now = new Date();
-            document.getElementById('monthSelect').value = now.getMonth() + 1;
-            document.getElementById('yearSelect').value = now.getFullYear();
-            onDateChange();
-        }
-
-        // Show transactions modal
-        function showTransactions(accountId, accountName, accountCode) {
-            currentAccountId = accountId;
-            currentAccountName = accountName;
-            currentAccountCode = accountCode;
-            
-            document.getElementById('modalAccountName').textContent = accountName;
-            document.getElementById('modalAccountCode').textContent = `Account Code: ${accountCode}`;
-            
-            // Set to current month/year
-            setCurrentMonth();
-            
-            // Show modal
-            document.getElementById('transactionsModal').classList.remove('hidden');
-            
-            // Load transactions
-            loadTransactions();
-        }
-
-        // Close transactions modal
-        function closeTransactionsModal() {
-            document.getElementById('transactionsModal').classList.add('hidden');
-            currentAccountId = null;
-        }
-
-        // Handle date change
-        function onDateChange() {
-            if (currentAccountId) {
-                loadTransactions();
+            const months = [];
+            for (let i = 0; i < MANUAL_MONTH_COUNT; i += 1) {
+                months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
             }
+
+            container.innerHTML = months.map((date, index) => {
+                const monthValue = formatMonthValue(date);
+                const label = date.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                return `
+                    <label class="flex items-center justify-between py-1 px-2 rounded hover:bg-gray-100">
+                        <span class="text-sm text-gray-700">${label}</span>
+                        <input type="checkbox" class="manual-month-checkbox h-4 w-4 text-indigo-600 border-gray-300 rounded" data-month="${monthValue}" ${index < 3 ? 'checked' : ''}>
+                    </label>
+                `;
+            }).join('');
         }
 
-        // Load transactions for selected account and date
-        async function loadTransactions() {
-            if (!currentAccountId) return;
-
-            const month = document.getElementById('monthSelect').value;
-            const year = document.getElementById('yearSelect').value;
-            
-            const loadingState = document.getElementById('transactionsLoading');
-            const transactionsContainer = document.getElementById('transactionsContainer');
-            const noTransactionsState = document.getElementById('noTransactionsState');
-            const errorState = document.getElementById('transactionsError');
-            const errorMessage = document.getElementById('transactionsErrorMessage');
-
-            // Hide all states
-            loadingState.classList.remove('hidden');
-            transactionsContainer.classList.add('hidden');
-            noTransactionsState.classList.add('hidden');
-            errorState.classList.add('hidden');
-
-            try {
-                const response = await fetch(`/api/xero/accounts/${currentAccountId}/transactions?month=${month}&year=${year}&accountName=${encodeURIComponent(currentAccountName)}&accountCode=${encodeURIComponent(currentAccountCode)}`);
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.message || 'Failed to fetch transactions');
-                }
-
-                loadingState.classList.add('hidden');
-
-                if (data.transactions && data.transactions.length > 0) {
-                    displayTransactions(data.transactions);
-                    document.getElementById('transactionsCount').textContent = data.count;
-                    transactionsContainer.classList.remove('hidden');
-                } else {
-                    noTransactionsState.classList.remove('hidden');
-                }
-            } catch (error) {
-                console.error('Error loading transactions', error);
-                loadingState.classList.add('hidden');
-                errorState.classList.remove('hidden');
-                errorMessage.textContent = error.message || 'Failed to load transactions. Please try again.';
-            }
+        function getSelectedManualMonths() {
+            return Array.from(document.querySelectorAll('.manual-month-checkbox'))
+                .filter((checkbox) => checkbox.checked)
+                .map((checkbox) => checkbox.getAttribute('data-month'))
+                .filter(Boolean);
         }
 
-        // Display transactions
-        function displayTransactions(transactions) {
-            const tbody = document.getElementById('transactionsTableBody');
-            
-            tbody.innerHTML = transactions.map(tx => `
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        ${formatTransactionDate(tx.date)}
-                    </td>
-                    <td class="px-6 py-4 text-sm text-gray-900">
-                        ${escapeHtml(tx.description)}
-                    </td>
-                    <td class="px-6 py-4 text-sm text-gray-500">
-                        ${tx.reference ? escapeHtml(tx.reference) : '-'}
-                    </td>
-                    <td class="px-6 py-4 text-sm text-gray-500">
-                        ${tx.contactName ? escapeHtml(tx.contactName) : '-'}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${
-                        tx.amount >= 0 ? 'text-green-600' : 'text-red-600'
-                    }">
-                        ${tx.amountFormatted}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            tx.isReconciled 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-gray-100 text-gray-800'
-                        }">
-                            ${tx.isReconciled ? 'Reconciled' : 'Unreconciled'}
-                        </span>
-                    </td>
-                </tr>
-            `).join('');
-        }
-
-        // Format transaction date
-        function formatTransactionDate(dateString) {
-            if (!dateString) return '-';
-            const date = new Date(dateString);
-            return date.toLocaleDateString('en-US', { 
-                year: 'numeric', 
-                month: 'short', 
-                day: 'numeric' 
+        function selectRecentMonths(count = 3) {
+            const checkboxes = Array.from(document.querySelectorAll('.manual-month-checkbox'));
+            checkboxes.forEach((checkbox, index) => {
+                checkbox.checked = index < count;
             });
         }
 
-        // Close modal when clicking outside
-        document.addEventListener('click', (e) => {
-            const modal = document.getElementById('transactionsModal');
-            if (e.target === modal) {
+        function clearManualMonthSelection() {
+            const checkboxes = document.querySelectorAll('.manual-month-checkbox');
+            checkboxes.forEach((checkbox) => {
+                checkbox.checked = false;
+            });
+        }
+
+        async function loadAdminSettings() {
+            setNightlySyncStatus('Loading settings...', 'info');
+            try {
+                const response = await fetch('/api/admin/settings');
+                if (!response.ok) {
+                    throw new Error('Failed to load admin settings');
+                }
+                const data = await response.json();
+                applyAdminSettingsToForm(data.settings || {});
+                setNightlySyncStatus('Settings loaded', 'muted');
+            } catch (error) {
+                console.error('Failed to load admin settings', error);
+                applyAdminSettingsToForm({});
+                setNightlySyncStatus('Unable to load settings. Using defaults.', 'warning');
+            }
+        }
+
+        function applyAdminSettingsToForm(settings) {
+            const enabledInput = document.getElementById('nightlySyncEnabled');
+            const timeInput = document.getElementById('nightlySyncTime');
+            const lookbackSelect = document.getElementById('nightlySyncLookback');
+
+            if (enabledInput) enabledInput.checked = settings.enabled ?? false;
+            if (timeInput) timeInput.value = settings.time || DEFAULT_NIGHTLY_TIME;
+            if (lookbackSelect) lookbackSelect.value = String(settings.lookbackMonths || 1);
+        }
+
+        async function saveNightlySyncSettings() {
+            const enabledInput = document.getElementById('nightlySyncEnabled');
+            const timeInput = document.getElementById('nightlySyncTime');
+            const lookbackSelect = document.getElementById('nightlySyncLookback');
+            const saveBtn = document.getElementById('saveNightlySyncBtn');
+
+            const payload = {
+                enabled: enabledInput ? enabledInput.checked : false,
+                time: timeInput?.value || DEFAULT_NIGHTLY_TIME,
+                lookbackMonths: Number(lookbackSelect?.value || '1'),
+            };
+
+            setNightlySyncStatus('Saving...', 'info');
+            setButtonLoading(saveBtn, true);
+
+            try {
+                const response = await fetch('/api/admin/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.error || 'Failed to save settings');
+                }
+                setNightlySyncStatus('Settings saved successfully.', 'success');
+            } catch (error) {
+                console.error('Failed to save nightly settings', error);
+                setNightlySyncStatus(error instanceof Error ? error.message : 'Failed to save settings.', 'danger');
+            } finally {
+                setButtonLoading(saveBtn, false);
+            }
+        }
+
+        async function runNightlySyncNow(event) {
+            if (event) event.preventDefault();
+            const button = document.getElementById('runNightlySyncBtn');
+            setButtonLoading(button, true);
+            setNightlySyncStatus('Starting scheduled sync...', 'info');
+            try {
+                const response = await fetch('/api/admin/sync/run-nightly', { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to start nightly sync');
+                }
+                setNightlySyncStatus(data.message || 'Nightly sync started successfully.', 'success');
+                if (Array.isArray(data.jobs) && data.jobs.length) {
+                    startJobPolling(data.jobs.map((job) => job.jobId));
+                }
+                refreshJobList();
+            } catch (error) {
+                console.error('Failed to start nightly sync', error);
+                setNightlySyncStatus(error instanceof Error ? error.message : 'Failed to start nightly sync.', 'danger');
+            } finally {
+                setButtonLoading(button, false);
+            }
+        }
+
+        async function startManualSync(event) {
+            if (event) event.preventDefault();
+            const button = document.getElementById('startManualSyncBtn');
+            const months = getSelectedManualMonths();
+
+            if (!months.length) {
+                setManualSyncStatus('Please select at least one month to sync.', 'warning');
+                return;
+            }
+
+            setManualSyncStatus('Starting manual sync...', 'info');
+            setButtonLoading(button, true);
+            try {
+                const response = await fetch('/api/admin/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ months }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to start manual sync');
+                }
+                setManualSyncStatus(data.message || 'Manual sync started.', 'success');
+                if (Array.isArray(data.jobs) && data.jobs.length) {
+                    startJobPolling(data.jobs.map((job) => job.jobId));
+                }
+                refreshJobList();
+            } catch (error) {
+                console.error('Failed to start manual sync', error);
+                setManualSyncStatus(error instanceof Error ? error.message : 'Failed to start manual sync.', 'danger');
+            } finally {
+                setButtonLoading(button, false);
+            }
+        }
+
+        function setNightlySyncStatus(message, variant = 'info') {
+            const statusEl = document.getElementById('nightlySyncStatus');
+            if (!statusEl) return;
+            const classes = {
+                info: 'text-gray-500',
+                success: 'text-green-600',
+                warning: 'text-amber-600',
+                danger: 'text-red-600',
+                muted: 'text-gray-400',
+            };
+            statusEl.className = `text-xs ${classes[variant] || classes.info}`;
+            statusEl.textContent = message;
+        }
+
+        function setManualSyncStatus(message, variant = 'info') {
+            const statusEl = document.getElementById('manualSyncStatus');
+            if (!statusEl) return;
+            const classes = {
+                info: 'text-gray-500',
+                success: 'text-green-600',
+                warning: 'text-amber-600',
+                danger: 'text-red-600',
+                muted: 'text-gray-400',
+            };
+            statusEl.className = `text-xs ${classes[variant] || classes.info}`;
+            statusEl.textContent = message;
+        }
+
+        function setButtonLoading(button, isLoading) {
+            if (!button) return;
+            if (isLoading) {
+                button.dataset.originalText = button.textContent;
+                button.textContent = 'Working...';
+                button.disabled = true;
+                button.classList.add('opacity-70', 'cursor-not-allowed');
+            } else {
+                button.textContent = button.dataset.originalText || button.textContent;
+                button.disabled = false;
+                button.classList.remove('opacity-70', 'cursor-not-allowed');
+            }
+        }
+
+        async function refreshJobList() {
+            const container = document.getElementById('adminJobList');
+            if (!container) return;
+            container.innerHTML = '<p class="text-sm text-gray-500">Loading...</p>';
+            try {
+                const response = await fetch('/api/admin/jobs/recent?limit=10');
+                if (!response.ok) {
+                    throw new Error('Failed to load recent jobs');
+                }
+                const data = await response.json();
+                renderJobList(Array.isArray(data.jobs) ? data.jobs : []);
+            } catch (error) {
+                console.error('Failed to load recent jobs', error);
+                container.innerHTML = '<p class="text-sm text-red-600">Failed to load recent jobs.</p>';
+            }
+        }
+
+        function renderJobList(jobs) {
+            const container = document.getElementById('adminJobList');
+            if (!container) return;
+            if (!jobs.length) {
+                container.innerHTML = '<p class="text-sm text-gray-500">No jobs to display.</p>';
+                return;
+            }
+
+            container.innerHTML = jobs.map((job) => {
+                const label = `${String(job.month).padStart(2, '0')}/${job.year}`;
+                const statusBadge = formatJobStatus(job.status);
+                const startedAt = job.startedAt ? new Date(job.startedAt).toLocaleString('en-GB') : '—';
+                const completedAt = job.completedAt ? new Date(job.completedAt).toLocaleString('en-GB') : null;
+                const duration = job.startedAt && job.completedAt
+                    ? `${Math.round((new Date(job.completedAt).getTime() - new Date(job.startedAt).getTime()) / 1000)}s`
+                    : '—';
+
+                return `
+                    <div class="border border-gray-200 rounded-lg p-3 flex justify-between items-start">
+                        <div>
+                            <div class="text-sm font-medium text-gray-800">${escapeHtml(label)}</div>
+                            <div class="text-xs text-gray-500">Started: ${escapeHtml(startedAt)}</div>
+                            <div class="text-xs text-gray-500">Duration: ${escapeHtml(duration)}</div>
+                            ${job.lastAccountName ? `<div class="text-xs text-gray-400">Last account: ${escapeHtml(job.lastAccountName)}</div>` : ''}
+                            ${job.error ? `<div class="text-xs text-red-600 mt-1">Error: ${escapeHtml(job.error)}</div>` : ''}
+                        </div>
+                        <div class="text-xs font-semibold uppercase tracking-wide ${statusBadge.class}">${statusBadge.label}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function formatJobStatus(status) {
+            const map = {
+                pending: { label: 'Pending', class: 'text-amber-600' },
+                running: { label: 'Running', class: 'text-blue-600' },
+                succeeded: { label: 'Completed', class: 'text-green-600' },
+                failed: { label: 'Failed', class: 'text-red-600' },
+            };
+            return map[status] || { label: 'Unknown', class: 'text-gray-500' };
+        }
+
+        async function fetchJobById(jobId) {
+            try {
+                const response = await fetch(`/api/xero/cache/job/${jobId}`);
+                if (response.status === 404) {
+                    return null;
+                }
+                if (!response.ok) {
+                    throw new Error('Failed to fetch job');
+                }
+                const data = await response.json();
+                return data.job || null;
+            } catch (error) {
+                console.warn('Failed to fetch job', error);
+                return null;
+            }
+        }
+
+        function startJobPolling(jobIds) {
+            adminJobIds = jobIds.filter(Boolean);
+            if (!adminJobIds.length) {
+                stopJobPolling();
+                return;
+            }
+            stopJobPolling();
+            pollTrackedJobs();
+            adminJobPollHandle = setInterval(pollTrackedJobs, 5000);
+        }
+
+        async function pollTrackedJobs() {
+            if (!adminJobIds.length) {
+                stopJobPolling();
+                return;
+            }
+            try {
+                const jobs = (await Promise.all(adminJobIds.map(fetchJobById))).filter(Boolean);
+
+                if (jobs.length) {
+                    renderJobList(jobs);
+                }
+
+                const active = jobs.filter((job) => job.status !== 'succeeded' && job.status !== 'failed');
+                adminJobIds = active.map((job) => job.jobId);
+
+                if (!adminJobIds.length) {
+                    stopJobPolling();
+                    refreshJobList();
+                }
+            } catch (error) {
+                console.warn('Failed to poll jobs', error);
+            }
+        }
+
+        function stopJobPolling() {
+            if (adminJobPollHandle) {
+                clearInterval(adminJobPollHandle);
+                adminJobPollHandle = null;
+            }
+            adminJobIds = [];
+        }
+
+        function handleDocumentClick(event) {
+            const transactionsModal = document.getElementById('transactionsModal');
+            if (transactionsModal && event.target === transactionsModal) {
                 closeTransactionsModal();
             }
-            const october2025Modal = document.getElementById('october2025Modal');
-            if (e.target === october2025Modal) {
-                closeOctober2025Modal();
-            }
-        });
 
-        // Initialize on page load
+            const adminModal = document.getElementById('adminModal');
+            if (adminModal && event.target === adminModal) {
+                closeAdminModal();
+            }
+        }
+
+        document.addEventListener('click', handleDocumentClick);
+
         document.addEventListener('DOMContentLoaded', async () => {
-            initializeYearDropdown();
+            setDefaultTransactionsRange();
+            populateManualSyncMonths();
             await updateAuthSection();
             const isAuthenticated = await checkAuthStatus();
-            
+
+            const applyRangeBtn = document.getElementById('applyRangeBtn');
+            if (applyRangeBtn) {
+                applyRangeBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    loadTransactions();
+                });
+            }
+
+            const resetRangeBtn = document.getElementById('resetRangeBtn');
+            if (resetRangeBtn) {
+                resetRangeBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    setDefaultTransactionsRange();
+                    if (currentAccountId) {
+                        loadTransactions();
+                    }
+                });
+            }
+
+            const adminBtn = document.getElementById('adminBtn');
+            if (adminBtn) {
+                adminBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    openAdminModal();
+                });
+            }
+
+            const saveScheduleBtn = document.getElementById('saveNightlySyncBtn');
+            if (saveScheduleBtn) {
+                saveScheduleBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    saveNightlySyncSettings();
+                });
+            }
+
+            const runScheduleBtn = document.getElementById('runNightlySyncBtn');
+            if (runScheduleBtn) {
+                runScheduleBtn.addEventListener('click', runNightlySyncNow);
+            }
+
+            const manualSyncBtn = document.getElementById('startManualSyncBtn');
+            if (manualSyncBtn) {
+                manualSyncBtn.addEventListener('click', startManualSync);
+            }
+
+            const refreshJobsBtn = document.getElementById('refreshJobListBtn');
+            if (refreshJobsBtn) {
+                refreshJobsBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    refreshJobList();
+                });
+            }
+
+            const selectRecentBtn = document.getElementById('selectRecentMonthsBtn');
+            if (selectRecentBtn) {
+                selectRecentBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    selectRecentMonths(3);
+                });
+            }
+
+            const clearSelectionBtn = document.getElementById('clearManualSelectionBtn');
+            if (clearSelectionBtn) {
+                clearSelectionBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    clearManualMonthSelection();
+                });
+            }
+
             if (isAuthenticated) {
                 await loadBankAccounts();
-                const allBtn = document.getElementById('allTransactionsBtn');
-                if (allBtn) {
-                    allBtn.addEventListener('click', () => showAllTransactions());
-                }
-                const hundredBtn = document.getElementById('hundredTransactionsBtn');
-                if (hundredBtn) {
-                    hundredBtn.addEventListener('click', () => showHundredTransactions());
-                }
-                const october2025Btn = document.getElementById('october2025Btn');
-                if (october2025Btn) {
-                    october2025Btn.addEventListener('click', () => showOctober2025Transactions());
-                }
-                const cacheOctoberBtn = document.getElementById('cacheOctoberBtn');
-                if (cacheOctoberBtn) {
-                    cacheOctoberBtn.addEventListener('click', () => cacheTransactionsForMonth(10, 2025));
-                }
-                await initializeCacheStatusMonitoring();
             } else {
                 showNotAuthenticatedState();
             }
         });
-
-        // All transactions modal logic
-        async function showAllTransactions() {
-            const modal = document.getElementById('allTransactionsModal');
-            const loading = document.getElementById('allTransactionsLoading');
-            const container = document.getElementById('allTransactionsContainer');
-            const error = document.getElementById('allTransactionsError');
-            const table = document.getElementById('allTransactionsTable');
-
-            modal.classList.remove('hidden');
-            loading.classList.remove('hidden');
-            container.classList.add('hidden');
-            error.classList.add('hidden');
-            table.innerHTML = '';
-
-            try {
-                const response = await fetch('/api/xero/transactions/all?pages=10');
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.message || 'Failed to fetch all transactions');
-
-                if (data.transactions && data.transactions.length > 0) {
-                    const rows = data.transactions.map(tx => `
-                        <tr>
-                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountId || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>
-                            <td class="px-4 py-2 text-sm text-gray-700">${escapeHtml(tx.description || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm ${'amount' in tx && tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(tx.amountFormatted || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
-                        </tr>
-                    `).join('');
-                    table.innerHTML = rows;
-                    loading.classList.add('hidden');
-                    container.classList.remove('hidden');
-                } else {
-                    loading.classList.add('hidden');
-                    error.textContent = 'No transactions were returned by Xero.';
-                    error.classList.remove('hidden');
-                }
-            } catch (e) {
-                loading.classList.add('hidden');
-                error.textContent = e.message || 'Failed to load transactions.';
-                error.classList.remove('hidden');
-            }
-        }
-
-        function closeAllTransactionsModal() {
-            document.getElementById('allTransactionsModal').classList.add('hidden');
-        }
-
-        // 100 Transactions modal logic
-        async function showHundredTransactions() {
-            const modal = document.getElementById('hundredTransactionsModal');
-            const loading = document.getElementById('hundredTransactionsLoading');
-            const container = document.getElementById('hundredTransactionsContainer');
-            const error = document.getElementById('hundredTransactionsError');
-            const table = document.getElementById('hundredTransactionsTable');
-
-            if (!modal || !loading || !container || !error || !table) {
-                console.error('Missing modal elements');
-                return;
-            }
-
-            modal.classList.remove('hidden');
-            loading.classList.remove('hidden');
-            container.classList.add('hidden');
-            error.classList.add('hidden');
-            table.innerHTML = '';
-
-            try {
-                const response = await fetch('/api/xero/transactions/100');
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.message || 'Failed to fetch 100 transactions');
-
-                if (data.transactions && data.transactions.length > 0) {
-                    const rows = data.transactions.map(tx => `
-                        <tr>
-                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.journalNumber?.toString() || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500 font-mono">${escapeHtml(tx.bankAccountId || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>
-                            <td class="px-4 py-2 text-sm text-gray-700">${escapeHtml(tx.description || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm ${'amount' in tx && tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(tx.amountFormatted || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
-                        </tr>
-                    `).join('');
-                    table.innerHTML = rows;
-                    loading.classList.add('hidden');
-                    container.classList.remove('hidden');
-                } else {
-                    loading.classList.add('hidden');
-                    error.textContent = 'No transactions were returned by Xero.';
-                    error.classList.remove('hidden');
-                }
-            } catch (e) {
-                loading.classList.add('hidden');
-                error.textContent = e instanceof Error ? e.message : 'Failed to load transactions.';
-                error.classList.remove('hidden');
-            }
-        }
-
-        function closeHundredTransactionsModal() {
-            const modal = document.getElementById('hundredTransactionsModal');
-            if (modal) {
-                modal.classList.add('hidden');
-            }
-        }
-
-        async function cacheTransactionsForMonth(month, year) {
-            const monthLabel = new Date(year, month - 1, 1).toLocaleString('en-GB', { month: 'long', year: 'numeric' });
-            const confirmation = confirm(`Start caching transactions for ${monthLabel}? This runs in the background and may take a while.`);
-            if (!confirmation) {
-                return;
-            }
-            try {
-                const response = await fetch('/api/xero/cache/month', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ month, year })
-                });
-                const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to start cache job');
-                }
-                if (data.job) {
-                    startCacheStatusTracking(data.job);
-                } else {
-                    initializeCacheStatusMonitoring();
-                }
-            } catch (error) {
-                const message = error instanceof Error ? error.message : 'Unknown error';
-                alert(`Failed to start cache job: ${message}`);
-            }
-        }
-
-        // October 2025 Transactions modal logic
-        let october2025Transactions = [];
-        let october2025CurrentPage = 1;
-        const october2025PageSize = 100;
-        let october2025Loading = false;
-        let october2025AbortController = null;
-
-        async function showOctober2025Transactions() {
-            const modal = document.getElementById('october2025Modal');
-            const loading = document.getElementById('october2025Loading');
-            const container = document.getElementById('october2025Container');
-            const error = document.getElementById('october2025Error');
-            const table = document.getElementById('october2025Table');
-            const accountFilters = document.getElementById('october2025AccountFilters');
-            const filterCount = document.getElementById('october2025FilterCount');
-            const transactionCount = document.getElementById('october2025TransactionCount');
-            const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
-            const currentPageEl = document.getElementById('october2025CurrentPage');
-            const totalPagesEl = document.getElementById('october2025TotalPages');
-            const showingFromEl = document.getElementById('october2025ShowingFrom');
-            const showingToEl = document.getElementById('october2025ShowingTo');
-
-            modal.classList.remove('hidden');
-            error.classList.add('hidden');
-
-            // Ensure we have cached accounts for filters
-            if (cachedAccounts.length === 0) {
-                try {
-                    const accountsResponse = await fetch('/api/xero/accounts');
-                    const accountsData = await accountsResponse.json();
-                    if (accountsResponse.ok && Array.isArray(accountsData.accounts)) {
-                        cachedAccounts = accountsData.accounts;
-                    }
-                } catch (accountsError) {
-                    console.warn('Failed to refresh accounts for October 2025 modal', accountsError);
-                }
-            }
-
-            // Build account filter checkboxes
-            accountFilters.innerHTML = cachedAccounts
-                .map((account) => {
-                    const displayName = account.name || account.code || account.accountId || 'Unknown';
-                    const displayCode = account.code ? ` (${account.code})` : '';
-                    return `
-                        <label class="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
-                            <input type="checkbox"
-                                   class="october2025AccountCheckbox rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                   data-account-id="${escapeHtml(account.accountId || '')}"
-                                   data-account-name="${escapeHtml(account.name || '')}"
-                                   data-account-code="${escapeHtml(account.code || '')}"
-                                   onchange="onOctober2025FiltersChanged()">
-                            <span class="text-sm text-gray-700">${escapeHtml(displayName)}${escapeHtml(displayCode)}</span>
-                        </label>
-                    `;
-                })
-                .join('');
-
-            // Reset state
-            october2025Transactions = [];
-            october2025CurrentPage = 1;
-            if (october2025AbortController) {
-                october2025AbortController.abort();
-                october2025AbortController = null;
-            }
-            october2025Loading = false;
-
-            // Reset UI state
-            if (filterCount) filterCount.textContent = '0 accounts selected';
-            if (transactionCount) transactionCount.textContent = '0 transactions';
-            if (totalTransactionsEl) totalTransactionsEl.textContent = '0';
-            if (currentPageEl) currentPageEl.textContent = '1';
-            if (totalPagesEl) totalPagesEl.textContent = '1';
-            if (showingFromEl) showingFromEl.textContent = '0';
-            if (showingToEl) showingToEl.textContent = '0';
-
-            // Show instructions
-            loading.classList.add('hidden');
-            container.classList.remove('hidden');
-            const prevBtn = document.getElementById('october2025PrevBtn');
-            const nextBtn = document.getElementById('october2025NextBtn');
-            if (prevBtn) prevBtn.disabled = true;
-            if (nextBtn) nextBtn.disabled = true;
-            if (table) {
-                table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">Select at least one account to load October 2025 transactions.</td></tr>';
-            }
-        }
-
-        function closeOctober2025Modal() {
-            const modal = document.getElementById('october2025Modal');
-            modal.classList.add('hidden');
-            october2025Transactions = [];
-            october2025CurrentPage = 1;
-            if (october2025AbortController) {
-                october2025AbortController.abort();
-                october2025AbortController = null;
-            }
-            october2025Loading = false;
-        }
-
-        function selectPropertiesOnly() {
-            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox');
-            checkboxes.forEach((checkbox) => {
-                const accountCode = checkbox.getAttribute('data-account-code') || '';
-                // Properties Only = accounts that DON'T start with 3 digits
-                const isProperty = accountCode ? !/^\d{3}/.test(accountCode) : true;
-                checkbox.checked = isProperty;
-            });
-            onOctober2025FiltersChanged();
-        }
-
-        function clearAccountFilters() {
-            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox');
-            checkboxes.forEach((checkbox) => {
-                checkbox.checked = false;
-            });
-            onOctober2025FiltersChanged();
-        }
-
-        async function onOctober2025FiltersChanged() {
-            const loading = document.getElementById('october2025Loading');
-            const container = document.getElementById('october2025Container');
-            const error = document.getElementById('october2025Error');
-            const table = document.getElementById('october2025Table');
-            const filterCount = document.getElementById('october2025FilterCount');
-            const transactionCount = document.getElementById('october2025TransactionCount');
-            const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
-
-            const checkboxes = Array.from(document.querySelectorAll('.october2025AccountCheckbox'));
-            const selectedCheckboxes = checkboxes.filter((checkbox) => checkbox.checked);
-
-            if (filterCount) {
-                filterCount.textContent = `${selectedCheckboxes.length} account${selectedCheckboxes.length !== 1 ? 's' : ''} selected`;
-            }
-
-            // Abort any ongoing request
-            if (october2025AbortController) {
-                october2025AbortController.abort();
-                october2025AbortController = null;
-            }
-
-            if (selectedCheckboxes.length === 0) {
-                october2025Transactions = [];
-                october2025CurrentPage = 1;
-                if (transactionCount) transactionCount.textContent = '0 transactions';
-                if (totalTransactionsEl) totalTransactionsEl.textContent = '0';
-                const currentPageEl = document.getElementById('october2025CurrentPage');
-                const totalPagesEl = document.getElementById('october2025TotalPages');
-                const showingFromEl = document.getElementById('october2025ShowingFrom');
-                const showingToEl = document.getElementById('october2025ShowingTo');
-                if (currentPageEl) currentPageEl.textContent = '1';
-                if (totalPagesEl) totalPagesEl.textContent = '1';
-                if (showingFromEl) showingFromEl.textContent = '0';
-                if (showingToEl) showingToEl.textContent = '0';
-                const prevBtn = document.getElementById('october2025PrevBtn');
-                const nextBtn = document.getElementById('october2025NextBtn');
-                if (prevBtn) prevBtn.disabled = true;
-                if (nextBtn) nextBtn.disabled = true;
-                if (table) {
-                    table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">Select at least one account to load October 2025 transactions.</td></tr>';
-                }
-                return;
-            }
-
-            const accountIds = new Set();
-            const accountCodes = new Set();
-            const accountNames = new Set();
-
-            selectedCheckboxes.forEach((checkbox) => {
-                const accountId = checkbox.getAttribute('data-account-id') || '';
-                const accountCode = checkbox.getAttribute('data-account-code') || '';
-                const accountName = checkbox.getAttribute('data-account-name') || '';
-
-                if (accountId) accountIds.add(accountId);
-                if (accountCode) accountCodes.add(accountCode);
-                if (accountName) accountNames.add(accountName);
-            });
-
-            const params = new URLSearchParams();
-            accountIds.forEach((id) => params.append('accountIds', id));
-            accountCodes.forEach((code) => params.append('accountCodes', code));
-            accountNames.forEach((name) => params.append('accountNames', name));
-
-            loading.classList.remove('hidden');
-            container.classList.add('hidden');
-            error.classList.add('hidden');
-            october2025CurrentPage = 1;
-
-            const controller = new AbortController();
-            october2025AbortController = controller;
-            october2025Loading = true;
-
-            try {
-                const response = await fetch(`/api/xero/transactions/october-2025?${params.toString()}`, {
-                    signal: controller.signal,
-                });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to fetch October 2025 transactions');
-                }
-
-                october2025Transactions = Array.isArray(data.transactions) ? data.transactions : [];
-
-                if (transactionCount) {
-                    transactionCount.textContent = `${october2025Transactions.length} transaction${october2025Transactions.length !== 1 ? 's' : ''}`;
-                }
-                if (totalTransactionsEl) {
-                    totalTransactionsEl.textContent = `${october2025Transactions.length}`;
-                }
-
-                loading.classList.add('hidden');
-                container.classList.remove('hidden');
-                displayOctober2025Page();
-            } catch (fetchError) {
-                if (fetchError.name === 'AbortError') {
-                    return;
-                }
-                loading.classList.add('hidden');
-                error.classList.remove('hidden');
-                error.textContent = fetchError.message || 'Failed to load October 2025 transactions';
-            } finally {
-                if (october2025AbortController === controller) {
-                    october2025AbortController = null;
-                }
-                october2025Loading = false;
-            }
-        }
-
-        function getFilteredTransactions() {
-            return october2025Transactions;
-        }
-
-        function displayOctober2025Page() {
-            const filteredTransactions = getFilteredTransactions();
-            const totalTransactions = filteredTransactions.length;
-            const totalPages = Math.max(1, Math.ceil(totalTransactions / october2025PageSize));
-
-            if (october2025CurrentPage > totalPages) {
-                october2025CurrentPage = totalPages;
-            }
-            if (october2025CurrentPage < 1) {
-                october2025CurrentPage = 1;
-            }
-
-            const startIndex = (october2025CurrentPage - 1) * october2025PageSize;
-            const endIndex = startIndex + october2025PageSize;
-            const pageTransactions = filteredTransactions.slice(startIndex, endIndex);
-
-            const checkboxes = document.querySelectorAll('.october2025AccountCheckbox:checked');
-            const filterCount = document.getElementById('october2025FilterCount');
-            if (filterCount) {
-                filterCount.textContent = `${checkboxes.length} account${checkboxes.length !== 1 ? 's' : ''} selected`;
-            }
-
-            const transactionCount = document.getElementById('october2025TransactionCount');
-            if (transactionCount) {
-                transactionCount.textContent = `${totalTransactions} transaction${totalTransactions !== 1 ? 's' : ''}`;
-            }
-
-            const currentPageEl = document.getElementById('october2025CurrentPage');
-            const totalPagesEl = document.getElementById('october2025TotalPages');
-            const showingFromEl = document.getElementById('october2025ShowingFrom');
-            const showingToEl = document.getElementById('october2025ShowingTo');
-            const totalTransactionsEl = document.getElementById('october2025TotalTransactions');
-
-            if (currentPageEl) currentPageEl.textContent = totalPages === 0 ? '1' : october2025CurrentPage;
-            if (totalPagesEl) totalPagesEl.textContent = totalPages;
-            if (showingFromEl) showingFromEl.textContent = totalTransactions > 0 ? startIndex + 1 : 0;
-            if (showingToEl) showingToEl.textContent = Math.min(endIndex, totalTransactions);
-            if (totalTransactionsEl) totalTransactionsEl.textContent = totalTransactions;
-
-            const prevBtn = document.getElementById('october2025PrevBtn');
-            const nextBtn = document.getElementById('october2025NextBtn');
-            if (prevBtn) {
-                prevBtn.disabled = october2025CurrentPage <= 1;
-            }
-            if (nextBtn) {
-                nextBtn.disabled = october2025CurrentPage >= totalPages;
-            }
-
-            const table = document.getElementById('october2025Table');
-            if (table) {
-                if (pageTransactions.length > 0) {
-                    const rows = pageTransactions
-                        .map(
-                            (tx) => `
-                        <tr class="hover:bg-gray-50">
-                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.date || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.journalNumber?.toString() || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-700">${escapeHtml(tx.bankAccountName || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.bankAccountCode || '')}</td>
-                            <td class="px-4 py-2 text-sm text-gray-700">${escapeHtml(tx.description || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-right text-sm ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(tx.amountFormatted || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.type || '')}</td>
-                            <td class="px-4 py-2 whitespace-nowrap text-xs text-gray-500">${escapeHtml(tx.status || '')}</td>
-                        </tr>
-                    `
-                        )
-                        .join('');
-                    table.innerHTML = rows;
-                } else {
-                    table.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">No transactions match the selected filters</td></tr>';
-                }
-            }
-        }
-
-        function changeOctober2025Page(delta) {
-            const filteredTransactions = getFilteredTransactions();
-            const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / october2025PageSize));
-
-            const newPage = october2025CurrentPage + delta;
-            if (newPage >= 1 && newPage <= totalPages) {
-                october2025CurrentPage = newPage;
-                displayOctober2025Page();
-            }
-        }
     </script>
 </body>
 </html>

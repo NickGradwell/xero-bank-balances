@@ -4,9 +4,9 @@ import session from 'express-session';
 import { randomUUID } from 'crypto';
 import { config } from './config';
 import { logger } from './utils/logger';
-import { getAuthorizationUrl, exchangeCodeForToken, setTokenSet, getXeroClient } from './services/xero/auth';
+import { getAuthorizationUrl, exchangeCodeForToken, setTokenSet } from './services/xero/auth';
 import { XeroService } from './services/xero/client';
-import { XeroTokenSet } from './types/xero';
+import { XeroTokenSet, BankTransaction } from './types/xero';
 import {
   initTransactionCache,
   getCachedTransactions,
@@ -19,6 +19,10 @@ import {
   failCacheJob,
   getCacheJobById,
   getLatestCacheJob,
+  getAdminSettings,
+  saveAdminSettings,
+  getStoredTokenSet,
+  getRecentCacheJobs
 } from './database/transactionCache';
 
 const app = express();
@@ -47,19 +51,23 @@ const delay = (ms: number): Promise<void> =>
 
 // Helper to cache transactions for a full month across multiple accounts
 async function cacheTransactionsForAccountsMonth(
-  sessionData: AppSession,
+  sessionData: AppSession | null,
   month: number,
   year: number,
   accountIds: string[] | undefined,
-  jobId: string
+  jobId: string,
+  initialTokenSet?: XeroTokenSet
 ): Promise<void> {
   try {
-    let currentTokenSet = sessionData.xeroTokenSet;
-    if (!currentTokenSet) {
+    const tokenCandidate = sessionData?.xeroTokenSet ?? initialTokenSet ?? (await getStoredTokenSet());
+
+    if (!tokenCandidate) {
       logger.warn('Cache job aborted: no token set available');
-      await failCacheJob({ jobId, errorMessage: 'No token set available in session' });
+      await failCacheJob({ jobId, errorMessage: 'No token set available for cache job' });
       return;
     }
+
+    let currentTokenSet: XeroTokenSet = tokenCandidate;
 
     const fromDate = new Date(year, month - 1, 1);
     const toDate = new Date(year, month, 0);
@@ -67,6 +75,12 @@ async function cacheTransactionsForAccountsMonth(
     const toDateStr = toDate.toISOString().split('T')[0];
 
     const initialService = new XeroService(currentTokenSet);
+    currentTokenSet = await initialService.ensureValidToken(currentTokenSet);
+    await setTokenSet(currentTokenSet);
+    if (sessionData) {
+      sessionData.xeroTokenSet = currentTokenSet;
+    }
+
     const bankAccounts = await initialService.getBankAccounts(currentTokenSet);
     const accountsToProcess = accountIds && accountIds.length > 0
       ? bankAccounts.filter((acc) => accountIds.includes(acc.accountId))
@@ -92,8 +106,14 @@ async function cacheTransactionsForAccountsMonth(
       const lastAccountId = account.accountId;
       const lastAccountName = account.name || '';
       try {
-        currentTokenSet = sessionData.xeroTokenSet || currentTokenSet;
-        const service = new XeroService(currentTokenSet);
+        const sessionToken: XeroTokenSet = sessionData?.xeroTokenSet ?? currentTokenSet;
+        const service = new XeroService(sessionToken);
+        currentTokenSet = await service.ensureValidToken(sessionToken);
+        await setTokenSet(currentTokenSet);
+        if (sessionData) {
+          sessionData.xeroTokenSet = currentTokenSet;
+        }
+
         logger.info('Caching account transactions', {
           accountId: account.accountId,
           accountName: account.name,
@@ -122,8 +142,6 @@ async function cacheTransactionsForAccountsMonth(
           toDate: toDateStr,
           transactions,
         });
-
-        currentTokenSet = sessionData.xeroTokenSet || currentTokenSet;
 
         logger.info('Cached account transactions', {
           accountId: account.accountId,
@@ -160,6 +178,62 @@ async function cacheTransactionsForAccountsMonth(
     await failCacheJob({ jobId, errorMessage: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
+
+const parseMonthString = (value: string): { year: number; month: number } | null => {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  const match = value.match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (Number.isNaN(year) || Number.isNaN(month) || month < 1 || month > 12) {
+    return null;
+  }
+  return { year, month };
+};
+
+const buildLookbackMonths = (count: number): Array<{ year: number; month: number }> => {
+  const months: Array<{ year: number; month: number }> = [];
+  const now = new Date();
+  const current = new Date(now.getFullYear(), now.getMonth(), 1);
+  for (let i = 0; i < count; i += 1) {
+    months.push({ year: current.getFullYear(), month: current.getMonth() + 1 });
+    current.setMonth(current.getMonth() - 1);
+  }
+  return months;
+};
+
+const getEffectiveTokenSet = async (sessionData?: AppSession | null): Promise<XeroTokenSet> => {
+  if (sessionData?.xeroTokenSet) {
+    return sessionData.xeroTokenSet;
+  }
+  const stored = await getStoredTokenSet();
+  if (stored) {
+    return stored;
+  }
+  throw new Error('No stored Xero token set available');
+};
+
+const kickOffCacheJob = (
+  jobId: string,
+  month: number,
+  year: number,
+  accountIds: string[] | undefined,
+  sessionData: AppSession | null,
+  tokenSet: XeroTokenSet
+): void => {
+  setImmediate(() => {
+    cacheTransactionsForAccountsMonth(sessionData, month, year, accountIds, jobId, tokenSet).catch((error) => {
+      logger.error('Background cache job failed', { jobId, month, year, error });
+      failCacheJob({ jobId, errorMessage: error instanceof Error ? error.message : 'Unknown error' }).catch((err) => {
+        logger.error('Failed to record cache job failure', { jobId, err });
+      });
+    });
+  });
+};
 
 // Middleware
 app.use(express.json());
@@ -290,7 +364,7 @@ app.get('/auth/xero/callback', async (req, res): Promise<void> => {
 
 // Logout endpoint
 app.post('/auth/logout', (req, res): void => {
-  req.session.destroy((err) => {
+  req.session.destroy((err: Error | null) => {
     if (err) {
       logger.error('Failed to destroy session', { error: err });
       res.status(500).json({ error: 'Failed to logout' });
@@ -358,516 +432,16 @@ app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   }
 });
 
-// API endpoint to get all transactions for "The Forest" account (using Journals)
-app.get('/api/xero/transactions/all', async (req, res): Promise<void> => {
-  try {
-    const tokenSet = req.session.xeroTokenSet;
-
-    if (!tokenSet) {
-      res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
-      return;
-    }
-
-    // Get current month/year or use query params
-    const month = req.query.month ? parseInt(req.query.month as string, 10) : new Date().getMonth() + 1;
-    const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
-
-    // Validate month and year
-    if (month < 1 || month > 12) {
-      res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
-      return;
-    }
-
-    if (year < 2000 || year > 2100) {
-      res.status(400).json({ error: 'Invalid year.' });
-      return;
-    }
-
-    // Calculate date range for the selected month
-    const fromDate = new Date(year, month - 1, 1);
-    const toDate = new Date(year, month, 0); // Last day of the month
-
-    // Format dates as YYYY-MM-DD
-    const formatDate = (date: Date): string => {
-      return date.toISOString().split('T')[0];
-    };
-
-    const xeroService = new XeroService(tokenSet);
-    
-    // First, get bank accounts to find "The Forest" account
-    const bankAccounts = await xeroService.getBankAccounts(tokenSet);
-    const forestAccount = bankAccounts.find(acc => 
-      acc.name.toLowerCase().includes('forest')
-    );
-
-    if (!forestAccount) {
-      res.status(404).json({ error: 'Could not find "The Forest" account' });
-      return;
-    }
-
-        // Get transactions for "The Forest" account using Account Transactions Report
-        const transactions = await xeroService.getAccountTransactionsReport(
-          tokenSet,
-          forestAccount.accountId,
-          forestAccount.name,
-          forestAccount.code,
-          formatDate(fromDate),
-          formatDate(toDate)
-        );
-
-    // Update session with potentially refreshed token
-    const updatedTokenSet = req.session.xeroTokenSet;
-    if (updatedTokenSet && updatedTokenSet !== tokenSet) {
-      req.session.xeroTokenSet = updatedTokenSet;
-    }
-
-    res.json({ 
-      count: transactions.length, 
-      month: month,
-      year: year,
-      account: {
-        id: forestAccount.accountId,
-        name: forestAccount.name,
-        code: forestAccount.code,
-      },
-      transactions: transactions 
-    });
-  } catch (error) {
-    logger.error('Failed to fetch all transactions', { error });
-    res.status(500).json({ error: 'Failed to fetch all transactions' });
-  }
-});
-
-// API endpoint to get 100 journal entries (unfiltered, any account)
-app.get('/api/xero/transactions/100', async (req, res): Promise<void> => {
-  try {
-    const tokenSet = req.session.xeroTokenSet;
-
-    if (!tokenSet) {
-      res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
-      return;
-    }
-
-    const xeroService = new XeroService(tokenSet);
-    const tenantId = tokenSet.xero_tenant_id;
-    if (!tenantId) {
-      res.status(500).json({ error: 'No tenant ID available' });
-      return;
-    }
-
-    // Fetch first 100 Journals (unfiltered)
-    const validTokenSet = await xeroService.ensureValidToken(tokenSet);
-    await setTokenSet(validTokenSet);
-
-    const client = getXeroClient();
-    const response = await client.accountingApi.getJournals(
-      tenantId,
-      undefined, // ifModifiedSince - no filter
-      0, // offset - start at 0
-      false // paymentsOnly - false = get all journals
-    );
-
-    const journals = response.body.journals || [];
-    const limitedJournals = journals.slice(0, 100); // Limit to 100 journals
-
-    // Transform journals to our format - show journal lines with account info
-    const formattedTransactions: any[] = [];
-    
-    for (const journal of limitedJournals) {
-      if (!journal.journalLines || journal.journalLines.length === 0) continue;
-      
-      // Each journal line represents a transaction entry
-      for (const line of journal.journalLines) {
-        const amount = line.netAmount || line.grossAmount || 0;
-        const currencyCode = 'GBP'; // Default, or extract from journal if available
-        
-        const formattedAmount = new Intl.NumberFormat('en-GB', {
-          style: 'currency',
-          currency: currencyCode,
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        }).format(amount);
-
-        let description = journal.reference || journal.sourceID || '';
-        if (!description && line.description) {
-          description = line.description;
-        }
-        if (!description) {
-          description = journal.journalNumber?.toString() || 'Journal Entry';
-        }
-
-        formattedTransactions.push({
-          transactionId: journal.journalID || `journal-${journal.journalNumber}`,
-          date: journal.journalDate ? new Date(journal.journalDate).toISOString().split('T')[0] : '',
-          description: description,
-          reference: journal.reference || journal.sourceID,
-          amount: amount,
-          amountFormatted: formattedAmount,
-          type: amount >= 0 ? 'DEBIT' : 'CREDIT',
-          status: journal.createdDateUTC ? 'AUTHORISED' : 'DRAFT',
-          bankAccountId: line.accountID || '',
-          bankAccountName: line.accountName || '',
-          bankAccountCode: line.accountCode || '',
-          journalNumber: journal.journalNumber,
-          journalID: journal.journalID,
-        });
-
-        // Stop if we've collected 100 entries
-        if (formattedTransactions.length >= 100) break;
-      }
-      
-      // Stop if we've collected 100 entries
-      if (formattedTransactions.length >= 100) break;
-    }
-
-    // Limit to 100 total entries (across all journal lines)
-    const finalTransactions = formattedTransactions.slice(0, 100);
-
-    logger.info(`Fetched ${finalTransactions.length} journal entries from ${limitedJournals.length} journals`);
-
-    res.json({
-      count: finalTransactions.length,
-      transactions: finalTransactions,
-      note: 'Showing journal entries (each journal may have multiple lines)',
-    });
-  } catch (error) {
-    logger.error('Failed to fetch 100 journal entries', { error });
-    res.status(500).json({ error: 'Failed to fetch 100 journal entries' });
-  }
-});
-
-// API endpoint to get October 2025 transactions (up to 500)
-app.get('/api/xero/transactions/october-2025', async (req, res): Promise<void> => {
-  try {
-    const tokenSet = req.session.xeroTokenSet;
-
-    if (!tokenSet) {
-      res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
-      return;
-    }
-
-    const xeroService = new XeroService(tokenSet);
-    const tenantId = tokenSet.xero_tenant_id;
-    if (!tenantId) {
-      res.status(500).json({ error: 'No tenant ID available' });
-      return;
-    }
-
-    // October 2025 date range
-    const fromDate = '2025-10-01';
-    const toDate = '2025-10-31';
-
-    // Fetch journals for October 2025
-    const validTokenSet = await xeroService.ensureValidToken(tokenSet);
-    await setTokenSet(validTokenSet);
-
-    const client = getXeroClient();
-
-    // Parse account filters from query parameters
-    const parseQueryArray = (value: unknown): string[] => {
-      if (!value) {
-        return [];
-      }
-      const values = Array.isArray(value) ? value : [value];
-      return values
-        .flatMap((item) => String(item).split(','))
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
-    };
-
-    const accountIds = parseQueryArray(req.query.accountIds);
-    const accountCodes = parseQueryArray(req.query.accountCodes);
-    const accountNames = parseQueryArray(req.query.accountNames);
-
-    if (accountIds.length === 0 && accountCodes.length === 0 && accountNames.length === 0) {
-      res.status(400).json({ error: 'At least one account must be selected' });
-      return;
-    }
-
-    const accountIdSet = new Set(accountIds);
-    const accountCodeSet = new Set(accountCodes.map((code) => code.toLowerCase()));
-    const accountNameSet = new Set(accountNames.map((name) => name.toLowerCase()));
-    const accountNameArray = Array.from(accountNameSet);
-
-    logger.info('(OCTOBER 2025) Fetching journals for selected accounts', {
-      accountIdsCount: accountIds.length,
-      accountCodesCount: accountCodes.length,
-      accountNamesCount: accountNames.length,
-      accountIds,
-      accountCodes,
-      accountNames,
-    });
-
-    // Fetch journals for October 2025 with early stopping
-    // Use a Map to deduplicate transactions by unique key
-    const transactionsMap = new Map<string, any>();
-    let offset = 0;
-    const fromDateObj = new Date(fromDate);
-    fromDateObj.setHours(0, 0, 0, 0);
-    const toDateObj = new Date(toDate);
-    toDateObj.setHours(23, 59, 59, 999);
-    let hasMore = true;
-    let consecutiveOutOfRangePages = 0;
-    const maxConsecutiveOutOfRangePages = 3;
-    const maxPagesWithoutMatches = 50; // Stop after 50 pages (5,000 journals) if no matches found - reduced for faster response
-    let pagesWithoutMatches = 0;
-    let lastTransactionCount = 0;
-
-    while (hasMore) {
-      try {
-        const response = await client.accountingApi.getJournals(
-          tenantId,
-          fromDateObj, // ifModifiedSince - filter by date at API level (only journals modified since Oct 1, 2025)
-          offset,
-          false // paymentsOnly - false = get all journals
-        );
-
-        const journals = response.body.journals || [];
-        if (journals.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        let journalsInRange = 0;
-        const sampleAccountIds = new Set<string>();
-        const sampleAccountNames = new Set<string>();
-        const sampleAccountCodes = new Set<string>();
-        let sampleCount = 0;
-        const maxSamples = 20;
-
-        for (const journal of journals) {
-          if (!journal.journalLines || journal.journalLines.length === 0) continue;
-          
-          // Check if journal date is within October 2025
-          const journalDate = journal.journalDate ? new Date(journal.journalDate) : null;
-          if (!journalDate || journalDate < fromDateObj || journalDate > toDateObj) {
-            continue;
-          }
-
-          journalsInRange++;
-
-          // Collect sample account identifiers for debugging (first few journals)
-          if (sampleCount < maxSamples) {
-            journal.journalLines.forEach((line) => {
-              if (line.accountID) sampleAccountIds.add(line.accountID);
-              if (line.accountName) sampleAccountNames.add(line.accountName.toLowerCase().trim());
-              if (line.accountCode) sampleAccountCodes.add(line.accountCode.toLowerCase());
-            });
-            sampleCount++;
-          }
-
-          // Each journal line represents a transaction entry
-          // Use line index to create unique key for each line in a journal
-          journal.journalLines.forEach((line, lineIndex) => {
-            const lineAccountId = line.accountID || '';
-            const lineAccountCodeRaw = line.accountCode || '';
-            const lineAccountCode = lineAccountCodeRaw.toLowerCase();
-            const lineAccountNameRaw = line.accountName || '';
-            const lineAccountName = lineAccountNameRaw.toLowerCase().trim();
-
-            let matchesAccount = false;
-
-            if (lineAccountId && accountIdSet.has(lineAccountId)) {
-              matchesAccount = true;
-            }
-
-            if (!matchesAccount && lineAccountCode && accountCodeSet.has(lineAccountCode)) {
-              matchesAccount = true;
-            }
-
-            // Try partial name matching (for cases like "The Forest" matching "The Forest (address)")
-            if (!matchesAccount && lineAccountName && accountNameArray.length > 0) {
-              for (const requestedName of accountNameArray) {
-                if (lineAccountName.includes(requestedName) || requestedName.includes(lineAccountName)) {
-                  matchesAccount = true;
-                  break;
-                }
-              }
-            }
-
-            if (!matchesAccount && lineAccountName) {
-              if (accountNameSet.has(lineAccountName)) {
-                matchesAccount = true;
-              } else {
-                // Check for partial match (e.g., "st elmo house" vs "st elmo house (8 lyndhurst)")
-                matchesAccount =
-                  accountNameArray.some((requestedName) => lineAccountName.includes(requestedName)) ||
-                  (accountNameArray.length > 0 && accountNameArray.some((requestedName) => requestedName.includes(lineAccountName)));
-              }
-            }
-
-            if (!matchesAccount) {
-              return;
-            }
-
-            // Create unique key: journalID + accountID + lineIndex + amount
-            // This ensures we don't duplicate the same journal line
-            const journalID = journal.journalID || `journal-${journal.journalNumber}`;
-            const accountID = line.accountID || '';
-            const amount = line.netAmount || line.grossAmount || 0;
-            const uniqueKey = `${journalID}|${accountID}|${lineIndex}|${amount}`;
-            
-            // Skip if we've already seen this transaction
-            if (transactionsMap.has(uniqueKey)) {
-              return;
-            }
-
-            const currencyCode = 'GBP';
-            
-            const formattedAmount = new Intl.NumberFormat('en-GB', {
-              style: 'currency',
-              currency: currencyCode,
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            }).format(amount);
-
-            let description = journal.reference || journal.sourceID || '';
-            if (!description && line.description) {
-              description = line.description;
-            }
-            if (!description) {
-              description = journal.journalNumber?.toString() || 'Journal Entry';
-            }
-
-            const transaction = {
-              transactionId: journalID,
-              date: journal.journalDate ? new Date(journal.journalDate).toISOString().split('T')[0] : '',
-              description: description,
-              reference: journal.reference || journal.sourceID,
-              amount: amount,
-              amountFormatted: formattedAmount,
-              type: amount >= 0 ? 'DEBIT' : 'CREDIT',
-              status: journal.createdDateUTC ? 'AUTHORISED' : 'DRAFT',
-              bankAccountId: accountID,
-              bankAccountName: line.accountName || '',
-              bankAccountCode: line.accountCode || '',
-              journalNumber: journal.journalNumber,
-              journalID: journal.journalID,
-            };
-
-            transactionsMap.set(uniqueKey, transaction);
-          });
-        }
-
-        if (journalsInRange > 0) {
-          consecutiveOutOfRangePages = 0;
-          
-          // Check if we found new transactions
-          if (transactionsMap.size > lastTransactionCount) {
-            pagesWithoutMatches = 0; // Reset counter if we found matches
-            lastTransactionCount = transactionsMap.size;
-          } else {
-            pagesWithoutMatches++;
-          }
-          
-          // Log sample account identifiers on first page for debugging
-          if (offset === 0 && transactionsMap.size === 0) {
-            logger.info('(OCTOBER 2025) Sample account identifiers found in journals:', {
-              sampleAccountIds: Array.from(sampleAccountIds).slice(0, 10),
-              sampleAccountNames: Array.from(sampleAccountNames).slice(0, 10),
-              sampleAccountCodes: Array.from(sampleAccountCodes).slice(0, 10),
-              requestedAccountIds: Array.from(accountIdSet),
-              requestedAccountCodes: Array.from(accountCodeSet),
-              requestedAccountNames: accountNameArray,
-            });
-          }
-          
-          logger.info(`Fetched offset ${offset}: ${journals.length} journals, ${journalsInRange} in date range (total unique transactions: ${transactionsMap.size})`);
-          
-          // Early stopping: If we've processed many pages without finding new matches, stop
-          // This prevents processing millions of journals when matches are sparse
-          if (pagesWithoutMatches >= maxPagesWithoutMatches && transactionsMap.size === 0) {
-            logger.warn(`Stopping pagination early: processed ${offset / 100} pages without finding any matching transactions`);
-            hasMore = false;
-            break;
-          }
-        } else {
-          consecutiveOutOfRangePages++;
-          if (consecutiveOutOfRangePages >= maxConsecutiveOutOfRangePages) {
-            logger.info(`Stopping pagination: ${consecutiveOutOfRangePages} consecutive pages with no journals in date range`);
-            hasMore = false;
-            break;
-          }
-        }
-
-        // If we got fewer than 100 journals, we've reached the end
-        if (journals.length < 100) {
-          hasMore = false;
-        } else {
-          offset += 100;
-          // Add delay to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 1100));
-        }
-      } catch (error) {
-        const errorDetails: any = {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          offset: offset,
-        };
-        
-        if (error instanceof Error && (error as any).response) {
-          const response = (error as any).response;
-          errorDetails.response = {
-            status: response?.status,
-            statusText: response?.statusText,
-            data: response?.data,
-            headers: response?.headers,
-          };
-          
-          // Handle rate limiting (429)
-          if (response?.status === 429) {
-            const retryAfter = parseInt(response?.headers?.['retry-after'] || '60', 10);
-            logger.warn(`Rate limit hit. Waiting ${retryAfter} seconds before retrying...`);
-            await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-            continue; // Retry this offset
-          }
-        }
-        
-        logger.error(`Error fetching journals at offset ${offset}`, errorDetails);
-        hasMore = false;
-      }
-    }
-
-    // Convert Map to Array
-    const formattedTransactions = Array.from(transactionsMap.values());
-    
-    // Sort by date (most recent first) for consistent ordering
-    formattedTransactions.sort((a, b) => {
-      const dateA = new Date(a.date).getTime();
-      const dateB = new Date(b.date).getTime();
-      return dateB - dateA;
-    });
-
-    // Log warning if no transactions found
-    if (formattedTransactions.length === 0) {
-      logger.warn('(OCTOBER 2025) No matching transactions found after processing all journals', {
-        requestedAccountIds: Array.from(accountIdSet),
-        requestedAccountCodes: Array.from(accountCodeSet),
-        requestedAccountNames: accountNameArray,
-        note: 'The account identifiers in journals may not match the requested values. Check the sample account identifiers logged earlier.',
-      });
-    }
-
-    logger.info(`Fetched ${formattedTransactions.length} unique journal entries for October 2025 for selected accounts`);
-
-    res.json({
-      count: formattedTransactions.length,
-      transactions: formattedTransactions,
-      fromDate,
-      toDate,
-    });
-  } catch (error) {
-    logger.error('Failed to fetch October 2025 transactions', { error });
-    res.status(500).json({ error: 'Failed to fetch October 2025 transactions' });
-  }
-});
-
 // API endpoint to get bank transactions for a specific account
 app.post('/api/xero/cache/month', async (req, res): Promise<void> => {
   const sessionData = req.session as AppSession;
-  const tokenSet = sessionData.xeroTokenSet;
 
-  if (!tokenSet) {
+  let effectiveTokenSet: XeroTokenSet;
+  try {
+    effectiveTokenSet = await getEffectiveTokenSet(sessionData);
+    sessionData.xeroTokenSet = effectiveTokenSet;
+  } catch (error) {
+    logger.warn('Attempted to start cache job without available token set', { error });
     res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
     return;
   }
@@ -886,7 +460,7 @@ app.post('/api/xero/cache/month', async (req, res): Promise<void> => {
     return;
   }
 
-  let accountsArray: string[] | undefined = undefined;
+  let accountsArray: string[] | undefined;
   if (Array.isArray(body.accountIds)) {
     accountsArray = body.accountIds.map((id) => String(id)).filter((id) => id.length > 0);
   }
@@ -903,22 +477,184 @@ app.post('/api/xero/cache/month', async (req, res): Promise<void> => {
       requestedAccounts: accountsArray ? accountsArray.length : 'all',
     });
 
-    res.json({
+    res.status(202).json({
       status: 'started',
       job: jobRecord,
     });
 
-    setImmediate(() => {
-      cacheTransactionsForAccountsMonth(sessionData, monthInt, yearInt, accountsArray, jobId).catch((error) => {
-        logger.error('Background cache job failed', { jobId, month: monthInt, year: yearInt, error });
-        failCacheJob({ jobId, errorMessage: error instanceof Error ? error.message : 'Unknown error' }).catch((err) => {
-          logger.error('Failed to record cache job failure', { jobId, err });
-        });
-      });
-    });
+    kickOffCacheJob(jobId, monthInt, yearInt, accountsArray, sessionData, effectiveTokenSet);
   } catch (error) {
     logger.error('Failed to create cache job record', { month: monthInt, year: yearInt, error });
     res.status(500).json({ error: 'Failed to start cache job' });
+  }
+});
+
+app.get('/api/admin/settings', async (req, res): Promise<void> => {
+  const sessionData = req.session as AppSession;
+  const hasToken = sessionData?.xeroTokenSet || (await getStoredTokenSet());
+
+  if (!hasToken) {
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const settings = await getAdminSettings();
+  res.json({ settings });
+});
+
+app.post('/api/admin/settings', async (req, res): Promise<void> => {
+  const sessionData = req.session as AppSession;
+  const hasToken = sessionData?.xeroTokenSet || (await getStoredTokenSet());
+
+  if (!hasToken) {
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const body = req.body as Partial<{ enabled: boolean; time: string; lookbackMonths: number; timezone?: string }>;
+
+  if (typeof body.enabled !== 'boolean') {
+    res.status(400).json({ error: 'enabled must be a boolean' });
+    return;
+  }
+
+  if (typeof body.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(body.time)) {
+    res.status(400).json({ error: 'time must be provided in HH:MM (24h) format' });
+    return;
+  }
+
+  const lookbackMonths = Number(body.lookbackMonths ?? 1);
+  if (Number.isNaN(lookbackMonths) || lookbackMonths < 1 || lookbackMonths > 12) {
+    res.status(400).json({ error: 'lookbackMonths must be between 1 and 12' });
+    return;
+  }
+
+  try {
+    const saved = await saveAdminSettings({
+      enabled: body.enabled,
+      time: body.time,
+      lookbackMonths,
+      timezone: typeof body.timezone === 'string' ? body.timezone : null,
+    });
+    res.json({ settings: saved });
+  } catch (error) {
+    logger.error('Failed to save admin settings', { error });
+    res.status(500).json({ error: 'Failed to save admin settings' });
+  }
+});
+
+app.post('/api/admin/sync', async (req, res): Promise<void> => {
+  const sessionData = req.session as AppSession;
+
+  let tokenSet: XeroTokenSet;
+  try {
+    tokenSet = await getEffectiveTokenSet(sessionData);
+    if (sessionData) {
+      sessionData.xeroTokenSet = tokenSet;
+    }
+  } catch (error) {
+    logger.warn('Manual sync requested without token set', { error });
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const body = req.body as Partial<{ months: string[] }>;
+  const requestedMonths = Array.isArray(body.months) ? Array.from(new Set(body.months)) : [];
+
+  const parsedMonths = requestedMonths
+    .map((value) => parseMonthString(value))
+    .filter((value): value is { year: number; month: number } => !!value)
+    .filter(({ year }) => year >= 2000 && year <= 2100);
+
+  if (!parsedMonths.length) {
+    res.status(400).json({ error: 'At least one valid month (YYYY-MM) must be provided.' });
+    return;
+  }
+
+  try {
+    const jobs = await Promise.all(
+      parsedMonths.map(async ({ year, month }) => {
+        const jobId = randomUUID();
+        const jobRecord = await createCacheJobRecord({ jobId, month, year });
+        kickOffCacheJob(jobId, month, year, undefined, sessionData, tokenSet);
+        return jobRecord;
+      })
+    );
+
+    res.status(202).json({
+      message: 'Manual sync started',
+      jobs,
+    });
+  } catch (error) {
+    logger.error('Failed to initiate manual sync', { error });
+    res.status(500).json({ error: 'Failed to start manual sync' });
+  }
+});
+
+app.post('/api/admin/sync/run-nightly', async (req, res): Promise<void> => {
+  const sessionData = req.session as AppSession;
+
+  let tokenSet: XeroTokenSet;
+  try {
+    tokenSet = await getEffectiveTokenSet(sessionData);
+    if (sessionData) {
+      sessionData.xeroTokenSet = tokenSet;
+    }
+  } catch (error) {
+    logger.warn('Nightly sync requested without token set', { error });
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const settings = await getAdminSettings();
+  const lookback = Math.max(1, Math.min(settings.lookbackMonths || 1, 12));
+  const months = buildLookbackMonths(lookback);
+
+  if (!months.length) {
+    res.status(400).json({ error: 'Unable to determine months for nightly sync.' });
+    return;
+  }
+
+  try {
+    const jobs = await Promise.all(
+      months.map(async ({ year, month }) => {
+        const jobId = randomUUID();
+        const jobRecord = await createCacheJobRecord({ jobId, month, year });
+        kickOffCacheJob(jobId, month, year, undefined, sessionData, tokenSet);
+        return jobRecord;
+      })
+    );
+
+    res.status(202).json({
+      message: settings.enabled
+        ? 'Nightly sync triggered using saved schedule.'
+        : 'Nightly sync triggered manually (schedule currently disabled).',
+      jobs,
+    });
+  } catch (error) {
+    logger.error('Failed to initiate nightly sync', { error });
+    res.status(500).json({ error: 'Failed to start nightly sync' });
+  }
+});
+
+app.get('/api/admin/jobs/recent', async (req, res): Promise<void> => {
+  const sessionData = req.session as AppSession;
+  const hasToken = sessionData?.xeroTokenSet || (await getStoredTokenSet());
+
+  if (!hasToken) {
+    res.status(401).json({ error: 'Not authenticated', requiresAuth: true });
+    return;
+  }
+
+  const limitParam = req.query.limit ? Number(req.query.limit) : 10;
+  const limit = Number.isNaN(limitParam) ? 10 : Math.min(Math.max(limitParam, 1), 50);
+
+  try {
+    const jobs = await getRecentCacheJobs(limit);
+    res.json({ jobs });
+  } catch (error) {
+    logger.error('Failed to load recent cache jobs', { error });
+    res.status(500).json({ error: 'Failed to load recent jobs' });
   }
 });
 
@@ -994,50 +730,114 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
     const { accountId } = req.params;
     const accountNameParam = req.query.accountName as string | undefined;
     const accountCodeParam = req.query.accountCode as string | undefined;
-    const month = req.query.month ? parseInt(req.query.month as string, 10) : new Date().getMonth() + 1;
-    const year = req.query.year ? parseInt(req.query.year as string, 10) : new Date().getFullYear();
     const forceRefresh = req.query.forceRefresh === 'true';
+    const fromDateParam = req.query.fromDate as string | undefined;
+    const toDateParam = req.query.toDate as string | undefined;
+    const fallbackMonth = req.query.month ? parseInt(req.query.month as string, 10) : undefined;
+    const fallbackYear = req.query.year ? parseInt(req.query.year as string, 10) : undefined;
 
-    if (month < 1 || month > 12) {
-      res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
-      return;
-    }
+    const parseDateInput = (value: string, endOfRange = false): Date | null => {
+      const monthMatch = value.match(/^\d{4}-\d{2}$/);
+      const dateMatch = value.match(/^\d{4}-\d{2}-\d{2}$/);
 
-    if (year < 2000 || year > 2100) {
-      res.status(400).json({ error: 'Invalid year.' });
-      return;
-    }
+      if (monthMatch) {
+        const [yearStr, monthStr] = value.split('-');
+        const yearNum = Number(yearStr);
+        const monthNum = Number(monthStr);
+        if (Number.isNaN(yearNum) || Number.isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+          return null;
+        }
+        if (endOfRange) {
+          return new Date(yearNum, monthNum, 0); // last day of month
+        }
+        return new Date(yearNum, monthNum - 1, 1);
+      }
 
-    const fromDate = new Date(year, month - 1, 1);
-    const toDate = new Date(year, month, 0);
-    const formatDate = (date: Date): string => date.toISOString().split('T')[0];
-    const fromDateStr = formatDate(fromDate);
-    const toDateStr = formatDate(toDate);
+      if (dateMatch) {
+        const date = new Date(`${value}T00:00:00`);
+        if (Number.isNaN(date.getTime())) {
+          return null;
+        }
+        return date;
+      }
 
-    if (!forceRefresh) {
-      const cached = await getCachedTransactions(accountId, month, year);
-      if (cached) {
-        res.json({
-          transactions: cached.transactions,
-          count: cached.transactions.length,
-          month,
-          year,
-          fromDate: cached.fromDate,
-          toDate: cached.toDate,
-          cached: true,
-          fetchedAt: cached.fetchedAt,
-        });
+      return null;
+    };
+
+    let rangeStartDate: Date | null = null;
+    let rangeEndDate: Date | null = null;
+
+    if (fromDateParam && toDateParam) {
+      rangeStartDate = parseDateInput(fromDateParam, false);
+      rangeEndDate = parseDateInput(toDateParam, true);
+      if (!rangeStartDate || !rangeEndDate) {
+        res.status(400).json({ error: 'Invalid fromDate or toDate. Use YYYY-MM or YYYY-MM-DD.' });
         return;
       }
+    } else if (fallbackMonth !== undefined || fallbackYear !== undefined) {
+      const month = fallbackMonth ?? new Date().getMonth() + 1;
+      const year = fallbackYear ?? new Date().getFullYear();
+
+      if (month < 1 || month > 12) {
+        res.status(400).json({ error: 'Invalid month. Must be between 1 and 12.' });
+        return;
+      }
+
+      if (year < 2000 || year > 2100) {
+        res.status(400).json({ error: 'Invalid year.' });
+        return;
+      }
+
+      rangeStartDate = new Date(year, month - 1, 1);
+      rangeEndDate = new Date(year, month, 0);
+    } else {
+      // Default: last 12 full months ending this month
+      const now = new Date();
+      const endOfCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const startOfRollingWindow = new Date(endOfCurrentMonth);
+      startOfRollingWindow.setMonth(startOfRollingWindow.getMonth() - 11);
+      startOfRollingWindow.setDate(1);
+      rangeStartDate = startOfRollingWindow;
+      rangeEndDate = endOfCurrentMonth;
     }
 
-    const xeroService = new XeroService(tokenSet);
+    if (!rangeStartDate || !rangeEndDate || rangeStartDate > rangeEndDate) {
+      res.status(400).json({ error: 'Invalid date range. Ensure fromDate is before toDate.' });
+      return;
+    }
+
+    const normalizedRangeStart = new Date(rangeStartDate);
+    normalizedRangeStart.setHours(0, 0, 0, 0);
+    const normalizedRangeEnd = new Date(rangeEndDate);
+    normalizedRangeEnd.setHours(23, 59, 59, 999);
+
+    const monthEntries: Array<{ year: number; month: number; start: Date; end: Date }> = [];
+    const iteratorStart = new Date(normalizedRangeStart.getFullYear(), normalizedRangeStart.getMonth(), 1);
+    const iteratorEnd = new Date(normalizedRangeEnd.getFullYear(), normalizedRangeEnd.getMonth(), 1);
+
+    let iterator = iteratorStart;
+    while (iterator <= iteratorEnd) {
+      const year = iterator.getFullYear();
+      const month = iterator.getMonth() + 1;
+      const monthStart = new Date(year, month - 1, 1);
+      const monthEnd = new Date(year, month, 0);
+      monthEntries.push({ year, month, start: monthStart, end: monthEnd });
+      iterator = new Date(iterator.getFullYear(), iterator.getMonth() + 1, 1);
+    }
+
+    if (monthEntries.length === 0) {
+      res.json({ transactions: [], count: 0, fromDate: normalizedRangeStart.toISOString(), toDate: normalizedRangeEnd.toISOString(), range: { months: 0, cachedMonths: 0, refreshedMonths: 0 } });
+      return;
+    }
+
+    let currentTokenSet = tokenSet;
+    let xeroService = new XeroService(currentTokenSet);
 
     let effectiveAccountName = accountNameParam || '';
     let effectiveAccountCode = accountCodeParam || '';
 
     if (!effectiveAccountName || !effectiveAccountCode) {
-      const bankAccounts = await xeroService.getBankAccounts(tokenSet);
+      const bankAccounts = await xeroService.getBankAccounts(currentTokenSet);
       const matchingAccount = bankAccounts.find((acc) => acc.accountId === accountId);
       if (matchingAccount) {
         effectiveAccountName = effectiveAccountName || matchingAccount.name || '';
@@ -1048,40 +848,93 @@ app.get('/api/xero/accounts/:accountId/transactions', async (req, res): Promise<
       }
     }
 
-    const transactions = await xeroService.getAccountTransactionsReport(
-      tokenSet,
-      accountId,
-      effectiveAccountName || '',
-      effectiveAccountCode || '',
-      fromDateStr,
-      toDateStr
-    );
+    const formatDate = (date: Date): string => date.toISOString().split('T')[0];
 
-    const fetchedAt = await saveTransactionsToCache({
-      accountId,
-      accountName: effectiveAccountName || accountNameParam || '',
-      accountCode: effectiveAccountCode || accountCodeParam || '',
-      month,
-      year,
-      fromDate: fromDateStr,
-      toDate: toDateStr,
-      transactions,
-    });
+    const aggregatedTransactions: BankTransaction[] = [];
+    let cachedMonths = 0;
+    let refreshedMonths = 0;
 
-    const updatedTokenSet = req.session.xeroTokenSet;
-    if (updatedTokenSet && updatedTokenSet !== tokenSet) {
-      req.session.xeroTokenSet = updatedTokenSet;
+    for (const entry of monthEntries) {
+      const monthStartStr = formatDate(entry.start);
+      const monthEndStr = formatDate(entry.end);
+      let monthTransactions: BankTransaction[] | null = null;
+
+      if (!forceRefresh) {
+        const cached = await getCachedTransactions(accountId, entry.month, entry.year);
+        if (cached) {
+          monthTransactions = cached.transactions;
+          cachedMonths += 1;
+        }
+      }
+
+      if (!monthTransactions) {
+        monthTransactions = await xeroService.getAccountTransactionsReport(
+          currentTokenSet,
+          accountId,
+          effectiveAccountName || '',
+          effectiveAccountCode || '',
+          monthStartStr,
+          monthEndStr
+        );
+
+        refreshedMonths += 1;
+
+        await saveTransactionsToCache({
+          accountId,
+          accountName: effectiveAccountName || accountNameParam || '',
+          accountCode: effectiveAccountCode || accountCodeParam || '',
+          month: entry.month,
+          year: entry.year,
+          fromDate: monthStartStr,
+          toDate: monthEndStr,
+          transactions: monthTransactions,
+        });
+
+        const updatedTokenSet = req.session.xeroTokenSet;
+        if (updatedTokenSet && updatedTokenSet !== currentTokenSet) {
+          currentTokenSet = updatedTokenSet;
+          xeroService = new XeroService(currentTokenSet);
+        }
+      }
+
+      aggregatedTransactions.push(...monthTransactions);
     }
 
+    const startTime = normalizedRangeStart.getTime();
+    const endTime = normalizedRangeEnd.getTime();
+
+    const filteredTransactions = aggregatedTransactions.filter((tx) => {
+      if (!tx.date) {
+        return false;
+      }
+      const txTime = new Date(tx.date).getTime();
+      if (Number.isNaN(txTime)) {
+        return false;
+      }
+      return txTime >= startTime && txTime <= endTime;
+    });
+
+    filteredTransactions.sort((a, b) => {
+      const dateA = new Date(a.date ?? '').getTime();
+      const dateB = new Date(b.date ?? '').getTime();
+      return dateB - dateA;
+    });
+
+    const rangeSummary = {
+      fromDate: formatDate(normalizedRangeStart),
+      toDate: formatDate(normalizedRangeEnd),
+      months: monthEntries.length,
+      cachedMonths,
+      refreshedMonths,
+    };
+
     res.json({
-      transactions,
-      count: transactions.length,
-      month,
-      year,
-      fromDate: fromDateStr,
-      toDate: toDateStr,
-      cached: false,
-      fetchedAt,
+      transactions: filteredTransactions,
+      count: filteredTransactions.length,
+      fromDate: rangeSummary.fromDate,
+      toDate: rangeSummary.toDate,
+      range: rangeSummary,
+      cached: cachedMonths === monthEntries.length && refreshedMonths === 0,
     });
   } catch (error) {
     logger.error('Failed to fetch bank transactions', { error });
