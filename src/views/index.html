@@ -156,6 +156,7 @@
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                                         <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                     </tr>
                                 </thead>
@@ -171,6 +172,63 @@
                         <i class="fas fa-receipt text-6xl text-gray-400 mb-4"></i>
                         <h3 class="text-xl font-semibold text-gray-800 mb-2">No Transactions Found</h3>
                         <p id="noTransactionsMessage" class="text-gray-600">No transactions found for the selected period.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transaction Detail Modal -->
+        <div id="transactionDetailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                <div class="flex items-center justify-between p-6 border-b border-gray-200">
+                    <div>
+                        <h2 class="text-2xl font-semibold text-gray-800">Transaction Details</h2>
+                        <p id="transactionDetailSubtitle" class="text-sm text-gray-500 mt-1"></p>
+                    </div>
+                    <button id="closeTransactionDetailBtn" class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Date</p>
+                            <p id="transactionDetailDate" class="text-sm text-gray-900 font-medium mt-1">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Amount</p>
+                            <p id="transactionDetailAmount" class="text-sm text-gray-900 font-medium mt-1">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Type</p>
+                            <span id="transactionDetailType" class="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800 mt-1">-</span>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Raw Type</p>
+                            <p id="transactionDetailRawType" class="text-sm text-gray-900 font-medium mt-1 break-words">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Reference</p>
+                            <p id="transactionDetailReference" class="text-sm text-gray-900 font-medium mt-1 break-words">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Contact</p>
+                            <p id="transactionDetailContact" class="text-sm text-gray-900 font-medium mt-1 break-words">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Status</p>
+                            <p id="transactionDetailStatus" class="text-sm text-gray-900 font-medium mt-1">-</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase tracking-wide text-gray-500">Reconciled</p>
+                            <p id="transactionDetailReconciled" class="text-sm text-gray-900 font-medium mt-1">-</p>
+                        </div>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-wide text-gray-500 mb-2">Raw Transaction Payload</p>
+                        <div class="border border-gray-200 rounded-lg bg-gray-50 p-4 overflow-x-auto">
+                            <pre id="transactionDetailJson" class="text-xs text-gray-800 whitespace-pre-wrap break-words"></pre>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -268,6 +326,7 @@
         let currentAccountId = null;
         let currentAccountName = '';
         let currentAccountCode = '';
+        let currentTransactions = [];
 
         let adminJobPollHandle = null;
         let adminJobIds = [];
@@ -504,24 +563,72 @@
             }
         }
 
+        function determineTransactionTypeInfo(transaction) {
+            const typeValue = transaction?.type ? String(transaction.type).toUpperCase() : '';
+            const amount = typeof transaction?.amount === 'number' ? transaction.amount : 0;
+
+            const isCreditIndicator =
+                typeValue.includes('RECEIVE') ||
+                typeValue.includes('CREDIT') ||
+                typeValue.includes('OVERPAYMENT') ||
+                typeValue.includes('PREPAYMENT');
+
+            const isDebitIndicator =
+                typeValue.includes('SPEND') ||
+                typeValue.includes('DEBIT') ||
+                typeValue.includes('PAYMENT') ||
+                typeValue.includes('WITHDRAWAL');
+
+            let isCredit;
+
+            if (isCreditIndicator && !isDebitIndicator) {
+                isCredit = true;
+            } else if (isDebitIndicator && !isCreditIndicator) {
+                isCredit = false;
+            } else {
+                isCredit = amount >= 0;
+            }
+
+            return {
+                label: isCredit ? 'Credit' : 'Debit',
+                badgeClass: isCredit ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800',
+                rawType: typeValue || 'N/A',
+                isCredit,
+            };
+        }
+
         function displayTransactions(transactions) {
             const tbody = document.getElementById('transactionsTableBody');
             if (!tbody) return;
 
-            tbody.innerHTML = transactions.map(tx => `
-                <tr class="hover:bg-gray-50">
+            currentTransactions = Array.isArray(transactions) ? transactions.slice() : [];
+
+            tbody.innerHTML = currentTransactions.map((tx) => {
+                const typeInfo = determineTransactionTypeInfo(tx);
+                return `
+                <tr class="hover:bg-blue-50 transition-colors cursor-pointer">
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${formatTransactionDate(tx.date)}</td>
                     <td class="px-6 py-4 text-sm text-gray-900">${escapeHtml(tx.description)}</td>
                     <td class="px-6 py-4 text-sm text-gray-500">${tx.reference ? escapeHtml(tx.reference) : '-'}</td>
                     <td class="px-6 py-4 text-sm text-gray-500">${tx.contactName ? escapeHtml(tx.contactName) : '-'}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-medium ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}">${tx.amountFormatted}</td>
                     <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${typeInfo.badgeClass}">
+                            ${typeInfo.label}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
                         <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${tx.isReconciled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
                             ${tx.isReconciled ? 'Reconciled' : 'Unreconciled'}
                         </span>
                     </td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
+
+            Array.from(tbody.querySelectorAll('tr')).forEach((row, index) => {
+                row.addEventListener('click', () => openTransactionDetail(index));
+            });
         }
 
         function formatTransactionDate(dateString) {
@@ -667,6 +774,80 @@
             const div = document.createElement('div');
             div.textContent = text ?? '';
             return div.innerHTML;
+        }
+
+        function openTransactionDetail(index) {
+            if (!Array.isArray(currentTransactions) || index < 0 || index >= currentTransactions.length) {
+                return;
+            }
+
+            const transaction = currentTransactions[index];
+            const modal = document.getElementById('transactionDetailModal');
+            const subtitle = document.getElementById('transactionDetailSubtitle');
+            const dateEl = document.getElementById('transactionDetailDate');
+            const amountEl = document.getElementById('transactionDetailAmount');
+            const typeEl = document.getElementById('transactionDetailType');
+            const rawTypeEl = document.getElementById('transactionDetailRawType');
+            const referenceEl = document.getElementById('transactionDetailReference');
+            const contactEl = document.getElementById('transactionDetailContact');
+            const statusEl = document.getElementById('transactionDetailStatus');
+            const reconciledEl = document.getElementById('transactionDetailReconciled');
+            const jsonEl = document.getElementById('transactionDetailJson');
+
+            const typeInfo = determineTransactionTypeInfo(transaction);
+
+            if (subtitle) {
+                subtitle.textContent = transaction.transactionId ? `Transaction ID: ${transaction.transactionId}` : 'Transaction';
+            }
+
+            if (dateEl) {
+                dateEl.textContent = formatTransactionDate(transaction.date) || '-';
+            }
+
+            if (amountEl) {
+                amountEl.textContent = transaction.amountFormatted || `${transaction.amount ?? 0}`;
+                amountEl.className = `text-sm font-medium mt-1 ${typeInfo.isCredit ? 'text-green-700' : 'text-red-700'}`;
+            }
+
+            if (typeEl) {
+                typeEl.textContent = typeInfo.label;
+                typeEl.className = `inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full mt-1 ${typeInfo.badgeClass}`;
+            }
+
+            if (rawTypeEl) {
+                rawTypeEl.textContent = transaction.type ? String(transaction.type) : '—';
+            }
+
+            if (referenceEl) {
+                referenceEl.textContent = transaction.reference ? String(transaction.reference) : '—';
+            }
+
+            if (contactEl) {
+                contactEl.textContent = transaction.contactName ? String(transaction.contactName) : '—';
+            }
+
+            if (statusEl) {
+                statusEl.textContent = transaction.status ? String(transaction.status) : '—';
+            }
+
+            if (reconciledEl) {
+                reconciledEl.textContent = transaction.isReconciled ? 'Yes' : 'No';
+            }
+
+            if (jsonEl) {
+                jsonEl.textContent = JSON.stringify(transaction, null, 2);
+            }
+
+            if (modal) {
+                modal.classList.remove('hidden');
+            }
+        }
+
+        function closeTransactionDetail() {
+            const modal = document.getElementById('transactionDetailModal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
         }
 
         async function logout() {
@@ -1030,9 +1211,19 @@
             if (adminModal && event.target === adminModal) {
                 closeAdminModal();
             }
+
+            const transactionDetailModal = document.getElementById('transactionDetailModal');
+            if (transactionDetailModal && event.target === transactionDetailModal) {
+                closeTransactionDetail();
+            }
         }
 
         document.addEventListener('click', handleDocumentClick);
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeTransactionDetail();
+            }
+        });
 
         document.addEventListener('DOMContentLoaded', async () => {
             setDefaultTransactionsRange();
@@ -1106,6 +1297,14 @@
                 clearSelectionBtn.addEventListener('click', (event) => {
                     event.preventDefault();
                     clearManualMonthSelection();
+                });
+            }
+
+            const closeTransactionDetailBtn = document.getElementById('closeTransactionDetailBtn');
+            if (closeTransactionDetailBtn) {
+                closeTransactionDetailBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    closeTransactionDetail();
                 });
             }
 
