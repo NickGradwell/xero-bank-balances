@@ -570,6 +570,7 @@
 
         let collectedStatements = [];
         let collectionInProgress = false;
+        let collectionLogInterval = null;
 
         async function collectBankStatements() {
             if (collectionInProgress) {
@@ -593,7 +594,28 @@
             if (progressDiv) progressDiv.classList.remove('hidden');
             if (progressText) progressText.textContent = 'Starting collection...';
 
+            // Start polling for logs during collection
+            if (collectionLogInterval) {
+                clearInterval(collectionLogInterval);
+            }
+            collectionLogInterval = setInterval(async () => {
+                try {
+                    const statusResponse = await fetch('/api/xero/login-agent/status');
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        if (statusData.logs && statusData.logs.length > 0) {
+                            updateLogs(statusData.logs);
+                        }
+                    }
+                } catch (e) {
+                    // Ignore polling errors
+                }
+            }, 1000); // Poll every second
+
             try {
+                // Add initial log message
+                addLogMessage('COLLECT', 'Starting bank statements collection...', null);
+
                 const response = await fetch('/api/xero/bank-statements/collect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -602,25 +624,58 @@
 
                 const result = await response.json();
 
+                // Stop polling
+                if (collectionLogInterval) {
+                    clearInterval(collectionLogInterval);
+                    collectionLogInterval = null;
+                }
+
+                // Get final logs
+                try {
+                    const statusResponse = await fetch('/api/xero/login-agent/status');
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        if (statusData.logs && statusData.logs.length > 0) {
+                            updateLogs(statusData.logs);
+                        }
+                    }
+                } catch (e) {
+                    // Ignore
+                }
+
                 if (response.ok && result.success) {
                     collectedStatements = result.accounts || [];
                     displayStatements(collectedStatements);
                     if (progressText) progressText.textContent = `Collection complete! Collected ${collectedStatements.length} accounts.`;
+                    addLogMessage('COLLECT', `Collection complete! Collected ${collectedStatements.length} accounts.`, null);
+                    
+                    if (result.errors && result.errors.length > 0) {
+                        result.errors.forEach(error => {
+                            addLogMessage('ERROR', error, error);
+                        });
+                    }
+                    
                     setTimeout(() => {
                         if (progressDiv) progressDiv.classList.add('hidden');
                     }, 3000);
                 } else {
-                    alert('Collection failed: ' + (result.error || result.message || 'Unknown error'));
+                    const errorMsg = result.error || result.message || 'Unknown error';
+                    alert('Collection failed: ' + errorMsg);
                     if (progressText) progressText.textContent = 'Collection failed';
-                }
-
-                if (result.errors && result.errors.length > 0) {
-                    console.warn('Collection errors:', result.errors);
+                    addLogMessage('ERROR', `Collection failed: ${errorMsg}`, errorMsg);
                 }
             } catch (error) {
+                // Stop polling on error
+                if (collectionLogInterval) {
+                    clearInterval(collectionLogInterval);
+                    collectionLogInterval = null;
+                }
+
+                const errorMsg = error instanceof Error ? error.message : 'Unknown error';
                 console.error('Error collecting bank statements', error);
-                alert('Error collecting bank statements: ' + (error instanceof Error ? error.message : 'Unknown error'));
+                alert('Error collecting bank statements: ' + errorMsg);
                 if (progressText) progressText.textContent = 'Collection error';
+                addLogMessage('ERROR', `Collection error: ${errorMsg}`, errorMsg);
             } finally {
                 collectionInProgress = false;
                 if (collectBtn) collectBtn.disabled = false;
@@ -629,6 +684,29 @@
                     stopBtn.disabled = true;
                 }
             }
+        }
+
+        function addLogMessage(step, message, error) {
+            const container = document.getElementById('logsContainer');
+            if (!container) return;
+
+            // Remove "No logs yet" message if present
+            if (container.querySelector('.text-gray-500')) {
+                container.innerHTML = '';
+            }
+
+            const timestamp = formatTimestamp(new Date().toISOString());
+            const errorClass = error ? 'text-red-400' : '';
+            const logEntry = document.createElement('div');
+            logEntry.className = `mb-1 ${errorClass}`;
+            logEntry.innerHTML = `
+                <span class="text-gray-500">[${timestamp}]</span>
+                <span class="text-yellow-400">[${step}]</span>
+                <span>${escapeHtml(message)}</span>
+                ${error ? `<span class="text-red-400"> - Error: ${escapeHtml(error)}</span>` : ''}
+            `;
+            container.appendChild(logEntry);
+            container.scrollTop = container.scrollHeight;
         }
 
         function displayStatements(accounts) {

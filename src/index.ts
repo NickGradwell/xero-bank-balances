@@ -1080,7 +1080,7 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
       const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
 
       agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
-      activeLoginAgent = agent;
+      activeLoginAgent = agent; // Make sure it's set as active so logs can be polled
     }
 
     try {
@@ -1100,8 +1100,12 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
       }
 
       // Collect bank statements
+      // Keep agent active so logs can be polled during collection
       logger.info(`Starting bank statements collection (limit: ${limit})`);
       const result = await agent.collectBankStatements(limit);
+      
+      // Don't close the agent - keep it active so user can see logs and potentially collect more
+      // Only close if we created a new agent and user wants to clean up (handled by stop endpoint)
       
       res.json(result);
     } catch (error) {
