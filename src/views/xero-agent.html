@@ -906,9 +906,6 @@
             const generateTotpBtn = document.getElementById('generateTotpSecretBtn');
             const testTotpBtn = document.getElementById('testTotpSecretBtn');
             const previewTotpBtn = document.getElementById('previewTotpCodeBtn');
-            const collectStatementsBtn = document.getElementById('collectStatementsBtn');
-            const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
-            const downloadAllBtn = document.getElementById('downloadAllBtn');
 
             if (runBtn) {
                 runBtn.addEventListener('click', () => {
@@ -947,12 +944,12 @@
                 previewTotpBtn.addEventListener('click', previewTotpCode);
             }
 
-            const collectStatementsBtnEl = document.getElementById('collectStatementsBtn');
+            const collectStatementsBtn = document.getElementById('collectStatementsBtn');
             const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
             const downloadAllBtn = document.getElementById('downloadAllBtn');
 
-            if (collectStatementsBtnEl) {
-                collectStatementsBtnEl.addEventListener('click', collectBankStatements);
+            if (collectStatementsBtn) {
+                collectStatementsBtn.addEventListener('click', collectBankStatements);
             }
 
             if (downloadSelectedBtn) {
