@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "postinstall": "npx playwright install --with-deps chromium"
   },
   "keywords": [
     "xero",
@@ -25,6 +26,7 @@
     "express": "^4.18.2",
     "express-session": "^1.18.2",
     "pg": "^8.16.3",
+    "playwright": "^1.55.0",
     "winston": "^3.11.0",
     "xero-node": "^5.0.0"
   },

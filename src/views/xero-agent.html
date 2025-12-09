@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xero Login Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-800">
+                        <i class="fas fa-robot mr-2 text-blue-600"></i>
+                        Xero Login Agent
+                    </h1>
+                    <p class="text-gray-600 mt-1">Automated browser agent for logging into Xero</p>
+                </div>
+                <div>
+                    <a href="/" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-arrow-left mr-1"></i>Back to Dashboard
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Agent Controls</h2>
+            <div class="flex gap-4 items-center">
+                <button id="runAgentBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors">
+                    <i class="fas fa-play mr-2"></i>Run Login Agent
+                </button>
+                <button id="stopAgentBtn" class="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg transition-colors" disabled>
+                    <i class="fas fa-stop mr-2"></i>Stop Agent
+                </button>
+                <button id="refreshStatusBtn" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg transition-colors">
+                    <i class="fas fa-sync-alt mr-2"></i>Refresh Status
+                </button>
+                <div class="flex items-center gap-2 ml-auto">
+                    <input type="checkbox" id="headlessMode" class="h-4 w-4 text-blue-600 border-gray-300 rounded" checked>
+                    <label for="headlessMode" class="text-sm text-gray-700">Headless Mode</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Display -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Status</h2>
+            <div id="statusDisplay" class="space-y-2">
+                <div class="text-gray-600">No agent running</div>
+            </div>
+        </div>
+
+        <!-- Screenshot Display -->
+        <div id="screenshotContainer" class="bg-white rounded-lg shadow-md p-6 mb-6 hidden">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Current View</h2>
+            <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                <img id="screenshotImg" src="" alt="Screenshot" class="max-w-full rounded-lg">
+            </div>
+        </div>
+
+        <!-- Logs Display -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold text-gray-800">Logs</h2>
+                <button id="clearLogsBtn" class="text-sm text-gray-600 hover:text-gray-800">
+                    <i class="fas fa-trash mr-1"></i>Clear Logs
+                </button>
+            </div>
+            <div id="logsContainer" class="bg-gray-900 text-green-400 font-mono text-sm p-4 rounded-lg max-h-96 overflow-y-auto">
+                <div class="text-gray-500">No logs yet...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let statusPollInterval = null;
+
+        function formatTimestamp(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function updateLogs(logs) {
+            const container = document.getElementById('logsContainer');
+            if (!container) return;
+
+            if (!logs || logs.length === 0) {
+                container.innerHTML = '<div class="text-gray-500">No logs yet...</div>';
+                return;
+            }
+
+            container.innerHTML = logs.map(log => {
+                const timestamp = formatTimestamp(log.timestamp);
+                const errorClass = log.error ? 'text-red-400' : '';
+                return `
+                    <div class="mb-1 ${errorClass}">
+                        <span class="text-gray-500">[${timestamp}]</span>
+                        <span class="text-yellow-400">[${log.step}]</span>
+                        <span>${escapeHtml(log.message)}</span>
+                        ${log.error ? `<span class="text-red-400"> - Error: ${escapeHtml(log.error)}</span>` : ''}
+                    </div>
+                `;
+            }).join('');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateStatus(data) {
+            const statusDisplay = document.getElementById('statusDisplay');
+            if (!statusDisplay) return;
+
+            if (!data.running) {
+                statusDisplay.innerHTML = '<div class="text-gray-600">No agent running</div>';
+                return;
+            }
+
+            const urlDisplay = data.currentUrl ? `<div class="text-sm text-blue-600 break-all">URL: ${escapeHtml(data.currentUrl)}</div>` : '';
+            
+            statusDisplay.innerHTML = `
+                <div class="flex items-center gap-2 mb-2">
+                    <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                    <span class="font-semibold text-green-600">Agent Running</span>
+                </div>
+                ${urlDisplay}
+            `;
+
+            if (data.screenshot) {
+                const container = document.getElementById('screenshotContainer');
+                const img = document.getElementById('screenshotImg');
+                if (container && img) {
+                    container.classList.remove('hidden');
+                    img.src = `data:image/png;base64,${data.screenshot}`;
+                }
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text ?? '';
+            return div.innerHTML;
+        }
+
+        async function runAgent() {
+            const btn = document.getElementById('runAgentBtn');
+            const stopBtn = document.getElementById('stopAgentBtn');
+            const headlessCheckbox = document.getElementById('headlessMode');
+            
+            if (btn) btn.disabled = true;
+            if (stopBtn) stopBtn.disabled = false;
+
+            try {
+                const headless = headlessCheckbox ? headlessCheckbox.checked : true;
+                const response = await fetch('/api/xero/login-agent/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ headless }),
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('Login successful! URL: ' + result.url);
+                    updateStatus({ running: false, currentUrl: result.url, screenshot: result.screenshot });
+                    if (result.screenshot) {
+                        const container = document.getElementById('screenshotContainer');
+                        const img = document.getElementById('screenshotImg');
+                        if (container && img) {
+                            container.classList.remove('hidden');
+                            img.src = `data:image/png;base64,${result.screenshot}`;
+                        }
+                    }
+                } else {
+                    alert('Login failed: ' + (result.error || result.message));
+                    updateStatus({ running: false, screenshot: result.screenshot });
+                    if (result.screenshot) {
+                        const container = document.getElementById('screenshotContainer');
+                        const img = document.getElementById('screenshotImg');
+                        if (container && img) {
+                            container.classList.remove('hidden');
+                            img.src = `data:image/png;base64,${result.screenshot}`;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error running agent', error);
+                alert('Error running agent: ' + (error instanceof Error ? error.message : 'Unknown error'));
+            } finally {
+                if (btn) btn.disabled = false;
+                if (stopBtn) stopBtn.disabled = true;
+            }
+        }
+
+        async function stopAgent() {
+            try {
+                await fetch('/api/xero/login-agent/stop', { method: 'POST' });
+                updateStatus({ running: false });
+                stopStatusPolling();
+            } catch (error) {
+                console.error('Error stopping agent', error);
+            }
+        }
+
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/xero/login-agent/status');
+                const data = await response.json();
+                updateStatus(data);
+                if (data.logs) {
+                    updateLogs(data.logs);
+                }
+            } catch (error) {
+                console.error('Error refreshing status', error);
+            }
+        }
+
+        function startStatusPolling() {
+            if (statusPollInterval) return;
+            statusPollInterval = setInterval(refreshStatus, 2000);
+        }
+
+        function stopStatusPolling() {
+            if (statusPollInterval) {
+                clearInterval(statusPollInterval);
+                statusPollInterval = null;
+            }
+        }
+
+        function clearLogs() {
+            const container = document.getElementById('logsContainer');
+            if (container) {
+                container.innerHTML = '<div class="text-gray-500">No logs yet...</div>';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const runBtn = document.getElementById('runAgentBtn');
+            const stopBtn = document.getElementById('stopAgentBtn');
+            const refreshBtn = document.getElementById('refreshStatusBtn');
+            const clearLogsBtn = document.getElementById('clearLogsBtn');
+
+            if (runBtn) {
+                runBtn.addEventListener('click', () => {
+                    runAgent();
+                    startStatusPolling();
+                });
+            }
+
+            if (stopBtn) {
+                stopBtn.addEventListener('click', () => {
+                    stopAgent();
+                });
+            }
+
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', refreshStatus);
+            }
+
+            if (clearLogsBtn) {
+                clearLogsBtn.addEventListener('click', clearLogs);
+            }
+
+            // Initial status check
+            refreshStatus();
+        });
+    </script>
+</body>
+</html>
+

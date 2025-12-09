@@ -7,6 +7,7 @@ import { logger } from './utils/logger';
 import { getAuthorizationUrl, exchangeCodeForToken, setTokenSet } from './services/xero/auth';
 import { XeroService } from './services/xero/client';
 import { XeroTokenSet, BankTransaction } from './types/xero';
+import { XeroLoginAgent } from './services/xero/loginAgent';
 import {
   initTransactionCache,
   getCachedTransactions,
@@ -945,6 +946,129 @@ app.get('/api/auth/status', (req, res) => {
     authenticated: !!tokenSet,
     tenantId: tokenSet?.xero_tenant_id,
   });
+});
+
+// Xero Login Agent routes
+let activeLoginAgent: XeroLoginAgent | null = null;
+
+app.post('/api/xero/login-agent/start', async (req, res): Promise<void> => {
+  try {
+    if (activeLoginAgent) {
+      res.status(400).json({
+        error: 'Login agent is already running',
+        message: 'Please wait for the current login attempt to complete',
+      });
+      return;
+    }
+
+    const { headless = true } = req.body as { headless?: boolean };
+    const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
+    const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+
+    activeLoginAgent = new XeroLoginAgent(username, password, headless);
+
+    // Run login in background
+    setImmediate(async () => {
+      try {
+        await activeLoginAgent?.login();
+      } catch (error) {
+        logger.error('Login agent error', { error });
+      }
+    });
+
+    res.json({
+      status: 'started',
+      message: 'Login agent started',
+    });
+  } catch (error) {
+    logger.error('Failed to start login agent', { error });
+    res.status(500).json({
+      error: 'Failed to start login agent',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+app.get('/api/xero/login-agent/status', async (_req, res): Promise<void> => {
+  try {
+    if (!activeLoginAgent) {
+      res.json({
+        running: false,
+        message: 'No active login agent',
+      });
+      return;
+    }
+
+    const logs = activeLoginAgent.getLogs();
+    const currentUrl = await activeLoginAgent.getCurrentUrl();
+    const screenshot = await activeLoginAgent.takeScreenshot();
+
+    res.json({
+      running: true,
+      logs,
+      currentUrl,
+      screenshot,
+    });
+  } catch (error) {
+    logger.error('Failed to get login agent status', { error });
+    res.status(500).json({
+      error: 'Failed to get login agent status',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/xero/login-agent/stop', async (_req, res): Promise<void> => {
+  try {
+    if (activeLoginAgent) {
+      await activeLoginAgent.close();
+      activeLoginAgent = null;
+      res.json({
+        status: 'stopped',
+        message: 'Login agent stopped',
+      });
+    } else {
+      res.json({
+        status: 'not_running',
+        message: 'No active login agent to stop',
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to stop login agent', { error });
+    res.status(500).json({
+      error: 'Failed to stop login agent',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
+  try {
+    const { headless = true } = req.body as { headless?: boolean };
+    const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
+    const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+
+    const agent = new XeroLoginAgent(username, password, headless);
+
+    try {
+      const result = await agent.login();
+      res.json(result);
+    } finally {
+      await agent.close();
+    }
+  } catch (error) {
+    logger.error('Login agent run error', { error });
+    res.status(500).json({
+      success: false,
+      message: 'Login agent error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// Serve Xero Agent page
+app.get('/xero-agent', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'views', 'xero-agent.html'));
 });
 
 // Serve main page

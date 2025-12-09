@@ -8,6 +8,8 @@ interface Config {
     clientSecret: string;
     redirectUri: string;
     scopes: string[];
+    username?: string;
+    password?: string;
   };
   app: {
     port: number;
@@ -29,6 +31,8 @@ export const config: Config = {
           'accounting.journals.read', // Required for Journals endpoint
           'offline_access',
         ],
+    username: process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com',
+    password: process.env.XERO_PASSWORD || 'xeEspresso321!',
   },
   app: {
     port: parseInt(process.env.PORT || '3000', 10),
