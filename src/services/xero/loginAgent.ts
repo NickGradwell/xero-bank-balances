@@ -24,6 +24,28 @@ export interface LoginLog {
   error?: string;
 }
 
+export interface BankStatementRow {
+  date: string;
+  description: string;
+  reference: string;
+  paymentRef: string;
+  spent: string;
+  received: string;
+  balance: string;
+}
+
+export interface AccountStatements {
+  accountName: string;
+  statements: BankStatementRow[];
+  collectedAt: Date;
+}
+
+export interface CollectionResult {
+  success: boolean;
+  accounts: AccountStatements[];
+  errors?: string[];
+}
+
 export class XeroLoginAgent {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -712,6 +734,448 @@ export class XeroLoginAgent {
       }
     }
     return null;
+  }
+
+  async collectBankStatements(limit: number = 3): Promise<CollectionResult> {
+    if (!this.page || this.page.isClosed()) {
+      throw new Error('Page not initialized. Please login first.');
+    }
+
+    const page = this.page;
+    const accounts: AccountStatements[] = [];
+    const errors: string[] = [];
+
+    try {
+      // Wait for dashboard to load (up to 30 seconds)
+      this.addLog('COLLECT', 'Waiting for dashboard to load...');
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {
+          this.addLog('COLLECT', 'networkidle timeout, waiting for page elements...');
+        });
+        await page.waitForTimeout(2000); // Additional wait for dynamic content
+      } catch (e) {
+        this.addLog('COLLECT', 'Dashboard load timeout, proceeding anyway...');
+      }
+
+      // Find all account cards on the left sidebar
+      this.addLog('COLLECT', 'Looking for account cards...');
+      const accountCardSelectors = [
+        '[data-testid*="account"]',
+        '.account-card',
+        '.account-item',
+        '[class*="account"]',
+        'a[href*="/account/"]',
+        'div[class*="AccountCard"]',
+        'li[class*="account"]',
+      ];
+
+      let accountCards: any[] = [];
+      for (const selector of accountCardSelectors) {
+        try {
+          const cards = await page.locator(selector).all();
+          if (cards.length > 0) {
+            this.addLog('COLLECT', `Found ${cards.length} account cards using selector: ${selector}`);
+            accountCards = cards;
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+
+      // If no cards found with selectors, try to find by text pattern or structure
+      if (accountCards.length === 0) {
+        this.addLog('COLLECT', 'No cards found with standard selectors, trying alternative approach...');
+        // Try to find clickable elements that might be account names
+        try {
+          const allLinks = await page.locator('a, button, [role="button"]').all();
+          const potentialAccounts: any[] = [];
+          for (const link of allLinks) {
+            try {
+              const text = await link.textContent();
+              if (text && (text.includes('The Forest') || text.includes('Mapesbury'))) {
+                potentialAccounts.push(link);
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+          if (potentialAccounts.length > 0) {
+            accountCards = potentialAccounts;
+            this.addLog('COLLECT', `Found ${accountCards.length} potential account links by text`);
+          }
+        } catch (e) {
+          this.addLog('COLLECT', 'Alternative approach also failed');
+        }
+      }
+
+      if (accountCards.length === 0) {
+        throw new Error('Could not find any account cards on the page');
+      }
+
+      const cardsToProcess = accountCards.slice(0, limit);
+      this.addLog('COLLECT', `Processing ${cardsToProcess.length} account cards...`);
+
+      for (let i = 0; i < cardsToProcess.length; i++) {
+        const card = cardsToProcess[i];
+        let accountName = 'Unknown Account';
+
+        try {
+          this.addLog('COLLECT', `Processing account ${i + 1} of ${cardsToProcess.length}...`);
+
+          // Extract account name from the card
+          try {
+            const nameText = await card.textContent();
+            if (nameText) {
+              // Clean up the name (remove extra whitespace, numbers in parentheses, etc.)
+              accountName = nameText.trim().split('\n')[0].trim();
+              // Remove numbers in parentheses like "(15)"
+              accountName = accountName.replace(/\s*\(\d+\)\s*$/, '').trim();
+            }
+          } catch (e) {
+            this.addLog('COLLECT', `Could not extract account name, using default`);
+          }
+
+          this.addLog('COLLECT', `Account name: ${accountName}`);
+
+          // Click on the account card/name
+          try {
+            await card.click({ timeout: 5000 });
+            this.addLog('COLLECT', `Clicked on account: ${accountName}`);
+          } catch (e) {
+            // Try scrolling into view first
+            try {
+              await card.scrollIntoViewIfNeeded();
+              await page.waitForTimeout(500);
+              await card.click({ timeout: 5000 });
+              this.addLog('COLLECT', `Clicked on account after scrolling: ${accountName}`);
+            } catch (e2) {
+              const errorMsg = `Failed to click on account ${accountName}`;
+              this.addLog('COLLECT', errorMsg, errorMsg);
+              errors.push(errorMsg);
+              continue;
+            }
+          }
+
+          // Wait for account detail page to load
+          this.addLog('COLLECT', `Waiting for account detail page to load...`);
+          await page.waitForTimeout(3000); // Wait for page to start loading
+          try {
+            await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {
+              this.addLog('COLLECT', 'networkidle timeout, proceeding...');
+            });
+            await page.waitForTimeout(2000); // Additional wait
+          } catch (e) {
+            this.addLog('COLLECT', 'Page load timeout, proceeding anyway...');
+          }
+
+          // Look for "Bank Statements" link
+          this.addLog('COLLECT', `Looking for "Bank Statements" link...`);
+          const bankStatementsSelectors = [
+            'a:has-text("Bank Statements")',
+            'button:has-text("Bank Statements")',
+            '[role="link"]:has-text("Bank Statements")',
+            'a[href*="statement"]',
+            'a[href*="Statement"]',
+            'a:has-text("Statements")',
+            'a:has-text("statements")',
+          ];
+
+          let bankStatementsLink = null;
+          for (const selector of bankStatementsSelectors) {
+            try {
+              const link = page.locator(selector).first();
+              if (await link.isVisible({ timeout: 3000 })) {
+                bankStatementsLink = link;
+                this.addLog('COLLECT', `Found "Bank Statements" link using selector: ${selector}`);
+                break;
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+
+          if (!bankStatementsLink) {
+            // Try getByRole or getByText
+            try {
+              bankStatementsLink = page.getByRole('link', { name: /bank statements/i }).first();
+              if (await bankStatementsLink.isVisible({ timeout: 3000 })) {
+                this.addLog('COLLECT', 'Found "Bank Statements" link using getByRole');
+              } else {
+                bankStatementsLink = null;
+              }
+            } catch (e) {
+              bankStatementsLink = null;
+            }
+          }
+
+          if (!bankStatementsLink) {
+            const errorMsg = `Account "${accountName}" does not have a "Bank Statements" link`;
+            this.addLog('COLLECT', errorMsg, errorMsg);
+            errors.push(errorMsg);
+            // Try to go back to dashboard
+            await this.navigateToHome();
+            continue;
+          }
+
+          // Click on "Bank Statements" link
+          this.addLog('COLLECT', `Clicking "Bank Statements" link...`);
+          try {
+            await bankStatementsLink.click({ timeout: 5000 });
+            this.addLog('COLLECT', 'Clicked "Bank Statements" link');
+          } catch (e) {
+            const errorMsg = `Failed to click "Bank Statements" link for account "${accountName}"`;
+            this.addLog('COLLECT', errorMsg, errorMsg);
+            errors.push(errorMsg);
+            await this.navigateToHome();
+            continue;
+          }
+
+          // Wait for table to load
+          this.addLog('COLLECT', `Waiting for statements table to load...`);
+          await page.waitForTimeout(3000); // Wait for table to start loading
+          try {
+            await page.waitForSelector('table', { timeout: 15000 });
+            this.addLog('COLLECT', 'Table found, waiting for data...');
+            await page.waitForTimeout(2000); // Additional wait for data to populate
+          } catch (e) {
+            const errorMsg = `Table did not load for account "${accountName}"`;
+            this.addLog('COLLECT', errorMsg, errorMsg);
+            errors.push(errorMsg);
+            await this.navigateToHome();
+            continue;
+          }
+
+          // Extract table data
+          this.addLog('COLLECT', `Extracting table data for account "${accountName}"...`);
+          const statements = await this.extractTableData(page);
+
+          if (statements.length === 0) {
+            this.addLog('COLLECT', `No statements found in table for account "${accountName}"`);
+          } else {
+            this.addLog('COLLECT', `Extracted ${statements.length} statement rows for account "${accountName}"`);
+          }
+
+          accounts.push({
+            accountName,
+            statements,
+            collectedAt: new Date(),
+          });
+
+          // Navigate back to home/dashboard
+          await this.navigateToHome();
+          await page.waitForTimeout(2000); // Wait before processing next account
+
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          const fullError = `Error processing account "${accountName}": ${errorMsg}`;
+          this.addLog('COLLECT', fullError, fullError);
+          errors.push(fullError);
+          // Try to navigate back to home
+          try {
+            await this.navigateToHome();
+          } catch (e) {
+            // If navigation fails, try to reload the page
+            try {
+              await page.goto(page.url().split('/').slice(0, 3).join('/'));
+            } catch (e2) {
+              // Ignore
+            }
+          }
+        }
+      }
+
+      this.addLog('COLLECT', `Collection complete. Processed ${accounts.length} accounts with ${errors.length} errors.`);
+
+      return {
+        success: accounts.length > 0,
+        accounts,
+        errors: errors.length > 0 ? errors : undefined,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.addLog('COLLECT', `Collection failed: ${errorMessage}`, errorMessage);
+      return {
+        success: false,
+        accounts,
+        errors: [...(errors || []), errorMessage],
+      };
+    }
+  }
+
+  private async navigateToHome(): Promise<void> {
+    if (!this.page || this.page.isClosed()) {
+      return;
+    }
+
+    const page = this.page;
+    this.addLog('NAVIGATE', 'Navigating to home/dashboard...');
+
+    // Try various ways to get back to home
+    const homeSelectors = [
+      'a:has-text("Home")',
+      'button:has-text("Home")',
+      '[role="link"]:has-text("Home")',
+      'a[href*="/dashboard"]',
+      'a[href*="/home"]',
+      'a[aria-label*="Home" i]',
+      'button[aria-label*="Home" i]',
+      '[data-testid*="home"]',
+      '[data-testid*="dashboard"]',
+    ];
+
+    let navigated = false;
+    for (const selector of homeSelectors) {
+      try {
+        const homeLink = page.locator(selector).first();
+        if (await homeLink.isVisible({ timeout: 2000 })) {
+          await homeLink.click();
+          navigated = true;
+          this.addLog('NAVIGATE', `Clicked home using selector: ${selector}`);
+          break;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (!navigated) {
+      // Try getByRole
+      try {
+        await page.getByRole('link', { name: /home/i }).first().click();
+        navigated = true;
+        this.addLog('NAVIGATE', 'Clicked home using getByRole');
+      } catch (e) {
+        // Try navigating to base URL
+        try {
+          const currentUrl = page.url();
+          const baseUrl = currentUrl.split('/').slice(0, 3).join('/');
+          await page.goto(baseUrl, { waitUntil: 'networkidle', timeout: 15000 });
+          navigated = true;
+          this.addLog('NAVIGATE', `Navigated to base URL: ${baseUrl}`);
+        } catch (e2) {
+          this.addLog('NAVIGATE', 'Could not navigate to home, continuing anyway...');
+        }
+      }
+    }
+
+    if (navigated) {
+      await page.waitForTimeout(2000); // Wait for page to load
+    }
+  }
+
+  private async extractTableData(page: Page): Promise<BankStatementRow[]> {
+    const statements: BankStatementRow[] = [];
+
+    try {
+      // Find the table
+      const table = page.locator('table').first();
+      if (!(await table.isVisible({ timeout: 2000 }))) {
+        this.addLog('EXTRACT', 'Table not visible');
+        return statements;
+      }
+
+      // Get table headers to map columns
+      const headers: string[] = [];
+      try {
+        const headerCells = await table.locator('thead th, thead td, tr:first-child th, tr:first-child td').all();
+        for (const cell of headerCells) {
+          const text = await cell.textContent();
+          if (text) {
+            headers.push(text.trim().toLowerCase());
+          }
+        }
+        this.addLog('EXTRACT', `Found table headers: ${headers.join(', ')}`);
+      } catch (e) {
+        this.addLog('EXTRACT', 'Could not read table headers, using default mapping');
+      }
+
+      // Get all data rows
+      const rows = await table.locator('tbody tr, tr:not(:first-child)').all();
+      this.addLog('EXTRACT', `Found ${rows.length} data rows`);
+
+      for (const row of rows) {
+        try {
+          const cells = await row.locator('td, th').all();
+          if (cells.length < 3) {
+            continue; // Skip rows with too few cells
+          }
+
+          const cellTexts: string[] = [];
+          for (const cell of cells) {
+            const text = await cell.textContent();
+            cellTexts.push(text ? text.trim() : '');
+          }
+
+          // Map cells to our structure
+          // We'll try to match by header position or by common patterns
+          let date = '';
+          let description = '';
+          let reference = '';
+          let paymentRef = '';
+          let spent = '';
+          let received = '';
+          let balance = '';
+
+          // Try to map by headers if available
+          if (headers.length > 0) {
+            for (let i = 0; i < Math.min(cellTexts.length, headers.length); i++) {
+              const header = headers[i];
+              const value = cellTexts[i];
+
+              if (header.includes('date')) {
+                date = value;
+              } else if (header.includes('description') || header.includes('details')) {
+                description = value;
+              } else if (header.includes('reference') && !header.includes('payment')) {
+                reference = value;
+              } else if (header.includes('payment') && header.includes('ref')) {
+                paymentRef = value;
+              } else if (header.includes('spent') || header.includes('debit') || header.includes('withdrawal')) {
+                spent = value;
+              } else if (header.includes('received') || header.includes('credit') || header.includes('deposit')) {
+                received = value;
+              } else if (header.includes('balance')) {
+                balance = value;
+              }
+            }
+          } else {
+            // Default mapping: assume standard order
+            // Date, Description, Reference, Payment Ref, Spent, Received, Balance
+            if (cellTexts.length >= 1) date = cellTexts[0];
+            if (cellTexts.length >= 2) description = cellTexts[1];
+            if (cellTexts.length >= 3) reference = cellTexts[2];
+            if (cellTexts.length >= 4) paymentRef = cellTexts[3];
+            if (cellTexts.length >= 5) spent = cellTexts[4];
+            if (cellTexts.length >= 6) received = cellTexts[5];
+            if (cellTexts.length >= 7) balance = cellTexts[6];
+          }
+
+          // Only add if we have at least a date
+          if (date) {
+            statements.push({
+              date,
+              description,
+              reference,
+              paymentRef,
+              spent,
+              received,
+              balance,
+            });
+          }
+        } catch (e) {
+          // Skip this row if there's an error
+          continue;
+        }
+      }
+
+      this.addLog('EXTRACT', `Successfully extracted ${statements.length} statement rows`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.addLog('EXTRACT', `Error extracting table data: ${errorMessage}`, errorMessage);
+    }
+
+    return statements;
   }
 }
 

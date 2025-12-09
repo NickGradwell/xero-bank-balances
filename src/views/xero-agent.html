@@ -130,6 +130,64 @@
             </div>
         </div>
 
+        <!-- Bank Statements Collection -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">
+                <i class="fas fa-file-invoice-dollar mr-2 text-green-600"></i>Bank Statements Collection
+            </h2>
+            <div class="space-y-4">
+                <div class="flex gap-4 items-center">
+                    <div class="flex items-center gap-2">
+                        <label for="collectionLimit" class="text-sm font-medium text-gray-700">Number of accounts:</label>
+                        <input 
+                            type="number" 
+                            id="collectionLimit" 
+                            value="3" 
+                            min="1" 
+                            max="100"
+                            class="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    <button id="collectStatementsBtn" class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-download mr-2"></i>Collect Bank Statements
+                    </button>
+                    <button id="stopCollectionBtn" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg transition-colors hidden">
+                        <i class="fas fa-stop mr-2"></i>Stop Collection
+                    </button>
+                </div>
+                <div id="collectionProgress" class="hidden">
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                            <span class="text-sm font-medium text-blue-800" id="progressText">Collecting bank statements...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Collected Statements Display -->
+        <div id="statementsContainer" class="hidden">
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold text-gray-800">
+                        <i class="fas fa-table mr-2 text-blue-600"></i>Collected Bank Statements
+                    </h2>
+                    <div class="flex gap-2">
+                        <button id="downloadSelectedBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                            <i class="fas fa-download mr-1"></i>Download Selected
+                        </button>
+                        <button id="downloadAllBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                            <i class="fas fa-download mr-1"></i>Download All
+                        </button>
+                    </div>
+                </div>
+                <div id="statementsCards" class="space-y-4">
+                    <!-- Cards will be inserted here -->
+                </div>
+            </div>
+        </div>
+
         <!-- Logs Display -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <div class="flex items-center justify-between mb-4">
@@ -510,6 +568,257 @@
             }
         }
 
+        let collectedStatements = [];
+        let collectionInProgress = false;
+
+        async function collectBankStatements() {
+            if (collectionInProgress) {
+                alert('Collection is already in progress');
+                return;
+            }
+
+            const limitInput = document.getElementById('collectionLimit');
+            const limit = limitInput ? parseInt(limitInput.value) || 3 : 3;
+            const collectBtn = document.getElementById('collectStatementsBtn');
+            const stopBtn = document.getElementById('stopCollectionBtn');
+            const progressDiv = document.getElementById('collectionProgress');
+            const progressText = document.getElementById('progressText');
+
+            collectionInProgress = true;
+            if (collectBtn) collectBtn.disabled = true;
+            if (stopBtn) {
+                stopBtn.classList.remove('hidden');
+                stopBtn.disabled = false;
+            }
+            if (progressDiv) progressDiv.classList.remove('hidden');
+            if (progressText) progressText.textContent = 'Starting collection...';
+
+            try {
+                const response = await fetch('/api/xero/bank-statements/collect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ limit }),
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    collectedStatements = result.accounts || [];
+                    displayStatements(collectedStatements);
+                    if (progressText) progressText.textContent = `Collection complete! Collected ${collectedStatements.length} accounts.`;
+                    setTimeout(() => {
+                        if (progressDiv) progressDiv.classList.add('hidden');
+                    }, 3000);
+                } else {
+                    alert('Collection failed: ' + (result.error || result.message || 'Unknown error'));
+                    if (progressText) progressText.textContent = 'Collection failed';
+                }
+
+                if (result.errors && result.errors.length > 0) {
+                    console.warn('Collection errors:', result.errors);
+                }
+            } catch (error) {
+                console.error('Error collecting bank statements', error);
+                alert('Error collecting bank statements: ' + (error instanceof Error ? error.message : 'Unknown error'));
+                if (progressText) progressText.textContent = 'Collection error';
+            } finally {
+                collectionInProgress = false;
+                if (collectBtn) collectBtn.disabled = false;
+                if (stopBtn) {
+                    stopBtn.classList.add('hidden');
+                    stopBtn.disabled = true;
+                }
+            }
+        }
+
+        function displayStatements(accounts) {
+            const container = document.getElementById('statementsContainer');
+            const cardsContainer = document.getElementById('statementsCards');
+            
+            if (!container || !cardsContainer) return;
+
+            if (!accounts || accounts.length === 0) {
+                container.classList.add('hidden');
+                return;
+            }
+
+            container.classList.remove('hidden');
+            cardsContainer.innerHTML = accounts.map((account, index) => {
+                const previewRows = account.statements.slice(0, 5);
+                const hasMore = account.statements.length > 5;
+                
+                return `
+                    <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-3">
+                                <input type="checkbox" class="account-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded" data-account-index="${index}">
+                                <h3 class="text-lg font-semibold text-gray-800">${escapeHtml(account.accountName)}</h3>
+                                <span class="text-sm text-gray-600">(${account.statements.length} statements)</span>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="toggleAccountTable(${index})" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                    <i class="fas fa-eye mr-1"></i><span id="toggle-text-${index}">View All</span>
+                                </button>
+                                <button onclick="downloadAccountCSV(${index})" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm transition-colors">
+                                    <i class="fas fa-download mr-1"></i>Download
+                                </button>
+                            </div>
+                        </div>
+                        <div id="table-preview-${index}">
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full text-sm border-collapse border border-gray-300">
+                                    <thead class="bg-gray-200">
+                                        <tr>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Date</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Description</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Reference</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Payment Ref</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-right">Spent</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-right">Received</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-right">Balance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${previewRows.map(row => `
+                                            <tr>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.date)}</td>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.description)}</td>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.reference)}</td>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.paymentRef)}</td>
+                                                <td class="border border-gray-300 px-2 py-1 text-right">${escapeHtml(row.spent)}</td>
+                                                <td class="border border-gray-300 px-2 py-1 text-right">${escapeHtml(row.received)}</td>
+                                                <td class="border border-gray-300 px-2 py-1 text-right">${escapeHtml(row.balance)}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                            ${hasMore ? `<p class="text-sm text-gray-600 mt-2">Showing 5 of ${account.statements.length} statements. Click "View All" to see all.</p>` : ''}
+                        </div>
+                        <div id="table-full-${index}" class="hidden">
+                            <div class="overflow-x-auto max-h-96 overflow-y-auto">
+                                <table class="min-w-full text-sm border-collapse border border-gray-300">
+                                    <thead class="bg-gray-200 sticky top-0">
+                                        <tr>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Date</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Description</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Reference</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-left">Payment Ref</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-right">Spent</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-right">Received</th>
+                                            <th class="border border-gray-300 px-2 py-1 text-right">Balance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${account.statements.map(row => `
+                                            <tr>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.date)}</td>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.description)}</td>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.reference)}</td>
+                                                <td class="border border-gray-300 px-2 py-1">${escapeHtml(row.paymentRef)}</td>
+                                                <td class="border border-gray-300 px-2 py-1 text-right">${escapeHtml(row.spent)}</td>
+                                                <td class="border border-gray-300 px-2 py-1 text-right">${escapeHtml(row.received)}</td>
+                                                <td class="border border-gray-300 px-2 py-1 text-right">${escapeHtml(row.balance)}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function toggleAccountTable(index) {
+            const preview = document.getElementById(`table-preview-${index}`);
+            const full = document.getElementById(`table-full-${index}`);
+            const toggleText = document.getElementById(`toggle-text-${index}`);
+            
+            if (preview && full && toggleText) {
+                if (preview.classList.contains('hidden')) {
+                    preview.classList.remove('hidden');
+                    full.classList.add('hidden');
+                    toggleText.textContent = 'View All';
+                } else {
+                    preview.classList.add('hidden');
+                    full.classList.remove('hidden');
+                    toggleText.textContent = 'View Preview';
+                }
+            }
+        }
+
+        function downloadAccountCSV(index) {
+            if (index < 0 || index >= collectedStatements.length) return;
+            
+            const account = collectedStatements[index];
+            const csv = generateCSV([account]);
+            downloadCSV(csv, `${account.accountName.replace(/[^a-z0-9]/gi, '_')}_statements.csv`);
+        }
+
+        function downloadSelectedCSV() {
+            const checkboxes = document.querySelectorAll('.account-checkbox:checked');
+            const selectedIndices = Array.from(checkboxes).map(cb => parseInt(cb.getAttribute('data-account-index') || '0'));
+            
+            if (selectedIndices.length === 0) {
+                alert('Please select at least one account to download');
+                return;
+            }
+
+            const selectedAccounts = selectedIndices.map(i => collectedStatements[i]).filter(Boolean);
+            const csv = generateCSV(selectedAccounts);
+            downloadCSV(csv, 'selected_statements.csv');
+        }
+
+        function downloadAllCSV() {
+            if (collectedStatements.length === 0) {
+                alert('No statements to download');
+                return;
+            }
+
+            const csv = generateCSV(collectedStatements);
+            downloadCSV(csv, 'all_statements.csv');
+        }
+
+        function generateCSV(accounts) {
+            const headers = ['Account Name', 'Date', 'Description', 'Reference', 'Payment Ref', 'Spent', 'Received', 'Balance'];
+            const rows = [headers.join(',')];
+
+            for (const account of accounts) {
+                for (const statement of account.statements) {
+                    const row = [
+                        `"${account.accountName.replace(/"/g, '""')}"`,
+                        `"${statement.date.replace(/"/g, '""')}"`,
+                        `"${statement.description.replace(/"/g, '""')}"`,
+                        `"${statement.reference.replace(/"/g, '""')}"`,
+                        `"${statement.paymentRef.replace(/"/g, '""')}"`,
+                        `"${statement.spent.replace(/"/g, '""')}"`,
+                        `"${statement.received.replace(/"/g, '""')}"`,
+                        `"${statement.balance.replace(/"/g, '""')}"`,
+                    ];
+                    rows.push(row.join(','));
+                }
+            }
+
+            return rows.join('\n');
+        }
+
+        function downloadCSV(csv, filename) {
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Make functions available globally for onclick handlers
+        window.toggleAccountTable = toggleAccountTable;
+        window.downloadAccountCSV = downloadAccountCSV;
+
         document.addEventListener('DOMContentLoaded', () => {
             const runBtn = document.getElementById('runAgentBtn');
             const stopBtn = document.getElementById('stopAgentBtn');
@@ -519,6 +828,9 @@
             const generateTotpBtn = document.getElementById('generateTotpSecretBtn');
             const testTotpBtn = document.getElementById('testTotpSecretBtn');
             const previewTotpBtn = document.getElementById('previewTotpCodeBtn');
+            const collectStatementsBtn = document.getElementById('collectStatementsBtn');
+            const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+            const downloadAllBtn = document.getElementById('downloadAllBtn');
 
             if (runBtn) {
                 runBtn.addEventListener('click', () => {
@@ -555,6 +867,22 @@
 
             if (previewTotpBtn) {
                 previewTotpBtn.addEventListener('click', previewTotpCode);
+            }
+
+            const collectStatementsBtn = document.getElementById('collectStatementsBtn');
+            const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+            const downloadAllBtn = document.getElementById('downloadAllBtn');
+
+            if (collectStatementsBtn) {
+                collectStatementsBtn.addEventListener('click', collectBankStatements);
+            }
+
+            if (downloadSelectedBtn) {
+                downloadSelectedBtn.addEventListener('click', downloadSelectedCSV);
+            }
+
+            if (downloadAllBtn) {
+                downloadAllBtn.addEventListener('click', downloadAllCSV);
             }
 
             // Load TOTP secret status on page load

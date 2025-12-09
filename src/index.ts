@@ -1052,6 +1052,78 @@ app.post('/api/xero/login-agent/stop', async (_req, res): Promise<void> => {
   }
 });
 
+// Bank Statements Collection endpoint
+app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> => {
+  try {
+    const { limit = 3 } = req.body as { limit?: number };
+    
+    // Use existing agent if available and logged in, otherwise create new one
+    let agent = activeLoginAgent;
+    let needsLogin = false;
+
+    if (!agent || !agent.getCurrentUrl() || (await agent.getCurrentUrl())?.includes('/login')) {
+      needsLogin = true;
+      logger.info('No active agent or not logged in, creating new agent for bank statements collection');
+      
+      const isServerEnvironment = 
+        !process.env.DISPLAY ||
+        process.env.CI === 'true' ||
+        process.env.RAILWAY_ENVIRONMENT !== undefined ||
+        process.env.DYNO !== undefined ||
+        process.env.VERCEL !== undefined ||
+        (process.platform === 'linux' && !process.env.DISPLAY);
+      
+      const effectiveHeadless = isServerEnvironment ? true : true; // Default to headless for collection
+      
+      const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
+      const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+      const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
+
+      agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
+      activeLoginAgent = agent;
+    }
+
+    try {
+      // Login first if needed
+      if (needsLogin) {
+        logger.info('Logging in before collecting bank statements...');
+        const loginResult = await agent.login();
+        if (!loginResult.success) {
+          res.status(500).json({
+            success: false,
+            message: 'Login failed',
+            error: loginResult.error || 'Could not login to Xero',
+          });
+          return;
+        }
+        logger.info('Login successful, proceeding with bank statements collection');
+      }
+
+      // Collect bank statements
+      logger.info(`Starting bank statements collection (limit: ${limit})`);
+      const result = await agent.collectBankStatements(limit);
+      
+      res.json(result);
+    } catch (error) {
+      logger.error('Bank statements collection error', { error });
+      res.status(500).json({
+        success: false,
+        message: 'Bank statements collection error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        accounts: [],
+      });
+    }
+  } catch (error) {
+    logger.error('Bank statements collection endpoint error', { error });
+    res.status(500).json({
+      success: false,
+      message: 'Bank statements collection endpoint error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      accounts: [],
+    });
+  }
+});
+
 app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
   try {
     const { headless: requestedHeadless = true } = req.body as { headless?: boolean };
