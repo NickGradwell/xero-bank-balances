@@ -331,9 +331,27 @@ export class XeroLoginAgent {
         if (is2FAPage && this.totpSecret) {
           this.addLog('2FA', '2FA challenge detected, generating TOTP code...');
           
+          // Trim and validate secret
+          const trimmedSecret = this.totpSecret.trim();
+          if (!trimmedSecret) {
+            throw new Error('TOTP secret is empty after trimming');
+          }
+          
+          this.addLog('2FA', `Using TOTP secret (length: ${trimmedSecret.length}, first 4 chars: ${trimmedSecret.substring(0, 4)}...)`);
+          
           // Generate the 6-digit code
-          const code = authenticator.generate(this.totpSecret);
-          this.addLog('2FA', `Generated TOTP code: ${code}`);
+          let code: string;
+          try {
+            code = authenticator.generate(trimmedSecret);
+            if (!code || code.length !== 6) {
+              throw new Error(`Invalid code generated: ${code}`);
+            }
+            this.addLog('2FA', `Generated TOTP code: ${code} (at ${new Date().toISOString()})`);
+          } catch (genError) {
+            const errorMsg = genError instanceof Error ? genError.message : 'Unknown error';
+            this.addLog('2FA', `Failed to generate TOTP code: ${errorMsg}`, errorMsg);
+            throw new Error(`TOTP code generation failed: ${errorMsg}. Please verify your TOTP secret is correct.`);
+          }
           
           // Find and fill the 2FA code input
           const codeSelectors = [
@@ -357,9 +375,19 @@ export class XeroLoginAgent {
             try {
               const codeField = page.locator(selector).first();
               if (await codeField.isVisible({ timeout: 2000 })) {
+                // Clear the field first, then fill
+                await codeField.clear();
                 await codeField.fill(code);
+                // Verify the code was entered correctly
+                const enteredValue = await codeField.inputValue();
+                if (enteredValue !== code) {
+                  this.addLog('2FA', `Warning: Code mismatch. Expected: ${code}, Got: ${enteredValue}`);
+                  // Try again
+                  await codeField.clear();
+                  await codeField.fill(code);
+                }
                 codeFilled = true;
-                this.addLog('2FA', `Filled 2FA code using selector: ${selector}`);
+                this.addLog('2FA', `Filled 2FA code using selector: ${selector}, verified: ${enteredValue}`);
                 break;
               }
             } catch (e) {

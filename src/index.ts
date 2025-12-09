@@ -1057,7 +1057,13 @@ app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
     const { headless = true } = req.body as { headless?: boolean };
     const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
     const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
-    const totpSecret = process.env.XERO_TOTP_SECRET || '';
+    const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
+
+    logger.info('Starting login agent', {
+      hasTotpSecret: !!totpSecret,
+      totpSecretLength: totpSecret.length,
+      totpSecretPreview: totpSecret ? `${totpSecret.substring(0, 4)}...` : 'none',
+    });
 
     const agent = new XeroLoginAgent(username, password, headless, totpSecret || undefined);
 
@@ -1106,13 +1112,27 @@ app.post('/api/xero/totp-secret', async (req, res): Promise<void> => {
       return;
     }
 
+    const trimmedSecret = secret.trim();
+
     // Validate secret format (should be base32)
     try {
-      authenticator.generate(secret);
+      const testCode = authenticator.generate(trimmedSecret);
+      if (!testCode || testCode.length !== 6) {
+        throw new Error('Generated code is invalid');
+      }
+      
+      logger.info('TOTP secret validated', {
+        secretLength: trimmedSecret.length,
+        secretPreview: `${trimmedSecret.substring(0, 4)}...`,
+        testCode: testCode,
+      });
     } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : 'Unknown error';
+      logger.error('TOTP secret validation failed', { error: errorMsg, secretLength: trimmedSecret.length });
       res.status(400).json({
         error: 'Invalid TOTP secret format',
-        message: 'The secret must be a valid base32 encoded string',
+        message: `The secret must be a valid base32 encoded string. Error: ${errorMsg}`,
+        hint: 'Make sure the secret is in base32 format (A-Z, 2-7 characters only, no spaces)',
       });
       return;
     }
@@ -1138,6 +1158,18 @@ app.post('/api/xero/totp-secret/generate', async (_req, res): Promise<void> => {
     // Generate a new TOTP secret
     const secret = authenticator.generateSecret();
     
+    // Validate the generated secret works
+    try {
+      const testCode = authenticator.generate(secret);
+      if (!testCode || testCode.length !== 6) {
+        throw new Error('Generated secret produces invalid codes');
+      }
+      logger.info('Generated TOTP secret validated', { secretLength: secret.length });
+    } catch (validateError) {
+      logger.error('Generated TOTP secret validation failed', { error: validateError });
+      throw new Error('Generated secret is invalid');
+    }
+    
     // Create QR code data URL for easy setup
     const otpAuthUrl = authenticator.keyuri(
       'nickg@amberleyinnovations.com',
@@ -1156,7 +1188,9 @@ app.post('/api/xero/totp-secret/generate', async (_req, res): Promise<void> => {
       secret,
       qrCode: qrCodeDataUrl,
       otpAuthUrl,
+      secretLength: secret.length,
       message: 'New TOTP secret generated. Scan the QR code with your authenticator app or enter the secret manually.',
+      note: 'Make sure to set this as XERO_TOTP_SECRET environment variable for the agent to use it.',
     });
   } catch (error) {
     logger.error('Failed to generate TOTP secret', { error });
@@ -1167,9 +1201,75 @@ app.post('/api/xero/totp-secret/generate', async (_req, res): Promise<void> => {
   }
 });
 
+// Test endpoint to verify TOTP secret works
+app.post('/api/xero/totp-secret/test', async (req, res): Promise<void> => {
+  try {
+    const { secret } = req.body as { secret?: string };
+    
+    if (!secret || secret.trim() === '') {
+      res.status(400).json({
+        error: 'TOTP secret is required',
+      });
+      return;
+    }
+
+    const trimmedSecret = secret.trim();
+
+    // Try to generate multiple codes to verify it works
+    const codes: string[] = [];
+    const errors: string[] = [];
+
+    try {
+      const code1 = authenticator.generate(trimmedSecret);
+      codes.push(code1);
+      
+      // Wait a moment and generate another (might be same or different depending on timing)
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const code2 = authenticator.generate(trimmedSecret);
+      codes.push(code2);
+      
+      logger.info('TOTP secret test successful', {
+        secretLength: trimmedSecret.length,
+        codes: codes,
+      });
+
+      res.json({
+        success: true,
+        secretLength: trimmedSecret.length,
+        secretFormat: 'base32',
+        codes,
+        message: 'TOTP secret is valid and can generate codes',
+        note: 'If these codes don\'t match your authenticator app, check: 1) Secret is correct, 2) Time is synchronized, 3) App uses same algorithm (TOTP, 6 digits, 30s step)',
+      });
+    } catch (genError) {
+      const errorMsg = genError instanceof Error ? genError.message : 'Unknown error';
+      errors.push(errorMsg);
+      
+      logger.error('TOTP secret test failed', {
+        error: errorMsg,
+        secretLength: trimmedSecret.length,
+        secretPreview: `${trimmedSecret.substring(0, 4)}...`,
+      });
+
+      res.status(400).json({
+        success: false,
+        error: 'TOTP secret is invalid',
+        message: `Failed to generate codes: ${errorMsg}`,
+        hint: 'The secret must be a valid base32 encoded string (A-Z, 2-7, no spaces or special characters)',
+      });
+    }
+  } catch (error) {
+    logger.error('TOTP secret test error', { error });
+    res.status(500).json({
+      error: 'Failed to test TOTP secret',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 app.get('/api/xero/totp-code/preview', async (_req, res): Promise<void> => {
   try {
-    const secret = process.env.XERO_TOTP_SECRET || '';
+    const secret = (process.env.XERO_TOTP_SECRET || '').trim();
     
     if (!secret) {
       res.status(400).json({
@@ -1179,15 +1279,46 @@ app.get('/api/xero/totp-code/preview', async (_req, res): Promise<void> => {
       return;
     }
 
-    // Generate current code
-    const code = authenticator.generate(secret);
+    // Generate current code with detailed info
+    let code: string;
+    try {
+      code = authenticator.generate(secret);
+      if (!code || code.length !== 6) {
+        throw new Error(`Invalid code generated: ${code}`);
+      }
+    } catch (genError) {
+      const errorMsg = genError instanceof Error ? genError.message : 'Unknown error';
+      logger.error('TOTP code generation failed in preview', { 
+        error: errorMsg,
+        secretLength: secret.length,
+        secretPreview: `${secret.substring(0, 4)}...`,
+      });
+      res.status(400).json({
+        error: 'Failed to generate TOTP code',
+        message: `TOTP code generation failed: ${errorMsg}. Please verify your TOTP secret is correct.`,
+        hint: 'The secret must be a valid base32 encoded string. Check for extra spaces or invalid characters.',
+      });
+      return;
+    }
+
     const step = authenticator.options.step || 30;
-    const remainingSeconds = step - (Math.floor(Date.now() / 1000) % step);
+    const now = Math.floor(Date.now() / 1000);
+    const remainingSeconds = step - (now % step);
+    const serverTime = new Date().toISOString();
+
+    logger.info('TOTP code preview generated', {
+      code,
+      remainingSeconds,
+      serverTime,
+      secretLength: secret.length,
+    });
 
     res.json({
       code,
       remainingSeconds,
       step,
+      serverTime,
+      secretLength: secret.length,
       note: 'This code is for testing/login purposes only. It will expire in the remaining seconds shown.',
     });
   } catch (error) {
