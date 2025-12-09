@@ -94,15 +94,48 @@ export class XeroLoginAgent {
     }
 
     try {
-      this.addLog('INIT', 'Initializing browser...');
-      this.browser = await chromium.launch({
-        headless: this.headless,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
+      // Force headless mode on server environments (Railway, Docker, CI, etc.)
+      // Check for common server environment indicators
+      const isServerEnvironment = 
+        !process.env.DISPLAY || // No X server
+        process.env.CI === 'true' || // CI environment
+        process.env.RAILWAY_ENVIRONMENT !== undefined || // Railway
+        process.env.DYNO !== undefined || // Heroku
+        process.env.VERCEL !== undefined || // Vercel
+        process.platform === 'linux' && !process.env.DISPLAY; // Linux without display
+      
+      const effectiveHeadless = isServerEnvironment ? true : this.headless;
+      
+      if (isServerEnvironment && !this.headless) {
+        this.addLog('INIT', 'Server environment detected - forcing headless mode (headed mode not available)');
+      } else {
+        this.addLog('INIT', `Initializing browser in ${effectiveHeadless ? 'headless' : 'headed'} mode...`);
+      }
+      
+      const launchArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+      ];
+      
+      // Add headless-specific args when in headless mode
+      if (effectiveHeadless) {
+        launchArgs.push(
           '--disable-gpu',
-        ],
+          '--disable-software-rasterizer',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-ipc-flooding-protection'
+        );
+      }
+      
+      this.browser = await chromium.launch({
+        headless: effectiveHeadless,
+        args: launchArgs,
       });
 
       this.context = await this.browser.newContext({

@@ -1054,18 +1054,46 @@ app.post('/api/xero/login-agent/stop', async (_req, res): Promise<void> => {
 
 app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
   try {
-    const { headless = true } = req.body as { headless?: boolean };
+    const { headless: requestedHeadless = true } = req.body as { headless?: boolean };
+    
+    // Force headless mode on server environments
+    const isServerEnvironment = 
+      !process.env.DISPLAY ||
+      process.env.CI === 'true' ||
+      process.env.RAILWAY_ENVIRONMENT !== undefined ||
+      process.env.DYNO !== undefined ||
+      process.env.VERCEL !== undefined ||
+      (process.platform === 'linux' && !process.env.DISPLAY);
+    
+    const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
+    
+    if (isServerEnvironment && !requestedHeadless) {
+      logger.warn('Server environment detected - forcing headless mode', {
+        requestedHeadless,
+        effectiveHeadless,
+        environment: {
+          DISPLAY: process.env.DISPLAY,
+          CI: process.env.CI,
+          RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+          platform: process.platform,
+        },
+      });
+    }
+    
     const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
     const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
     const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
 
     logger.info('Starting login agent', {
+      requestedHeadless,
+      effectiveHeadless,
+      isServerEnvironment,
       hasTotpSecret: !!totpSecret,
       totpSecretLength: totpSecret.length,
       totpSecretPreview: totpSecret ? `${totpSecret.substring(0, 4)}...` : 'none',
     });
 
-    const agent = new XeroLoginAgent(username, password, headless, totpSecret || undefined);
+    const agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
 
     try {
       const result = await agent.login();
