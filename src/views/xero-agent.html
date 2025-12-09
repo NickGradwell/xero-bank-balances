@@ -481,8 +481,22 @@
         }
 
         async function previewTotpCode() {
+            const input = document.getElementById('totpSecretInput');
+            
+            if (!input) return;
+            
+            const secret = input.value.trim();
+            if (!secret) {
+                alert('Please enter a TOTP secret first');
+                return;
+            }
+
             try {
-                const response = await fetch('/api/xero/totp-code/preview');
+                const response = await fetch('/api/xero/totp-code/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ secret }),
+                });
                 const data = await response.json();
                 
                 if (response.ok) {

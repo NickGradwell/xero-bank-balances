@@ -1267,14 +1267,16 @@ app.post('/api/xero/totp-secret/test', async (req, res): Promise<void> => {
   }
 });
 
-app.get('/api/xero/totp-code/preview', async (_req, res): Promise<void> => {
+app.post('/api/xero/totp-code/preview', async (req, res): Promise<void> => {
   try {
-    const secret = (process.env.XERO_TOTP_SECRET || '').trim();
+    // Allow secret to be passed in request body, fallback to environment variable
+    const { secret: requestSecret } = req.body as { secret?: string };
+    const secret = (requestSecret || process.env.XERO_TOTP_SECRET || '').trim();
     
     if (!secret) {
       res.status(400).json({
         error: 'TOTP secret is not configured',
-        message: 'Please configure your TOTP secret first',
+        message: 'Please provide a TOTP secret in the request body or configure XERO_TOTP_SECRET environment variable',
       });
       return;
     }
