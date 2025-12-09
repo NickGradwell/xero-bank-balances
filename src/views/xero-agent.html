@@ -28,6 +28,69 @@
             </div>
         </div>
 
+        <!-- TOTP Secret Configuration -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">
+                <i class="fas fa-shield-alt mr-2 text-green-600"></i>2FA Configuration
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="space-y-4">
+                    <div>
+                        <label for="totpSecretInput" class="block text-sm font-medium text-gray-700 mb-2">
+                            TOTP Secret Key
+                        </label>
+                        <div class="flex gap-2">
+                            <input 
+                                type="text" 
+                                id="totpSecretInput" 
+                                placeholder="Enter your TOTP secret key"
+                                class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                            <button id="saveTotpSecretBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                <i class="fas fa-save mr-1"></i>Save
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">
+                            Enter the secret key from your authenticator app or generate a new one below.
+                        </p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="generateTotpSecretBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                            <i class="fas fa-key mr-1"></i>Generate New Key
+                        </button>
+                        <button id="previewTotpCodeBtn" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                            <i class="fas fa-eye mr-1"></i>Preview Code
+                        </button>
+                    </div>
+                    <div id="totpStatus" class="text-sm"></div>
+                </div>
+                <div class="space-y-4">
+                    <div id="qrCodeContainer" class="hidden">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            QR Code for Setup
+                        </label>
+                        <div class="border border-gray-200 rounded-lg p-4 bg-gray-50 flex justify-center">
+                            <img id="qrCodeImg" src="" alt="QR Code" class="max-w-xs">
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">
+                            Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
+                        </p>
+                    </div>
+                    <div id="generatedSecretContainer" class="hidden">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Generated Secret
+                        </label>
+                        <div class="bg-gray-100 border border-gray-300 rounded-lg p-3 font-mono text-sm break-all">
+                            <span id="generatedSecretText"></span>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">
+                            Copy this secret and save it securely. You'll need to set it as the XERO_TOTP_SECRET environment variable.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Control Panel -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 class="text-xl font-semibold text-gray-800 mb-4">Agent Controls</h2>
@@ -237,11 +300,160 @@
             }
         }
 
+        async function loadTotpSecret() {
+            try {
+                const response = await fetch('/api/xero/totp-secret');
+                const data = await response.json();
+                const input = document.getElementById('totpSecretInput');
+                const status = document.getElementById('totpStatus');
+                
+                if (input) {
+                    if (data.configured) {
+                        input.value = data.secret; // Will show masked version
+                        input.placeholder = 'TOTP secret is configured (masked)';
+                    } else {
+                        input.value = '';
+                        input.placeholder = 'Enter your TOTP secret key';
+                    }
+                }
+                
+                if (status) {
+                    if (data.configured) {
+                        status.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>TOTP secret is configured</span>';
+                    } else {
+                        status.innerHTML = '<span class="text-amber-600"><i class="fas fa-exclamation-triangle mr-1"></i>TOTP secret not configured. 2FA login will fail if required.</span>';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading TOTP secret', error);
+            }
+        }
+
+        async function saveTotpSecret() {
+            const input = document.getElementById('totpSecretInput');
+            const status = document.getElementById('totpStatus');
+            
+            if (!input) return;
+            
+            const secret = input.value.trim();
+            if (!secret) {
+                if (status) {
+                    status.innerHTML = '<span class="text-red-600">Please enter a TOTP secret</span>';
+                }
+                return;
+            }
+
+            if (status) {
+                status.innerHTML = '<span class="text-gray-600">Saving...</span>';
+            }
+
+            try {
+                const response = await fetch('/api/xero/totp-secret', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ secret }),
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    if (status) {
+                        status.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>' + (data.message || 'TOTP secret saved') + '</span>';
+                    }
+                    // Note: In production, you'd need to set this as an environment variable
+                    alert('TOTP secret validated. For production use, set XERO_TOTP_SECRET environment variable with this value.');
+                } else {
+                    if (status) {
+                        status.innerHTML = '<span class="text-red-600">' + (data.error || 'Failed to save TOTP secret') + '</span>';
+                    }
+                }
+            } catch (error) {
+                console.error('Error saving TOTP secret', error);
+                if (status) {
+                    status.innerHTML = '<span class="text-red-600">Error saving TOTP secret</span>';
+                }
+            }
+        }
+
+        async function generateTotpSecret() {
+            const status = document.getElementById('totpStatus');
+            const qrContainer = document.getElementById('qrCodeContainer');
+            const qrImg = document.getElementById('qrCodeImg');
+            const secretContainer = document.getElementById('generatedSecretContainer');
+            const secretText = document.getElementById('generatedSecretText');
+            const input = document.getElementById('totpSecretInput');
+
+            if (status) {
+                status.innerHTML = '<span class="text-gray-600">Generating...</span>';
+            }
+
+            try {
+                const response = await fetch('/api/xero/totp-secret/generate', {
+                    method: 'POST',
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    if (input) {
+                        input.value = data.secret;
+                    }
+                    
+                    if (secretText) {
+                        secretText.textContent = data.secret;
+                    }
+                    
+                    if (qrImg && data.qrCode) {
+                        qrImg.src = data.qrCode;
+                        if (qrContainer) {
+                            qrContainer.classList.remove('hidden');
+                        }
+                    }
+                    
+                    if (secretContainer) {
+                        secretContainer.classList.remove('hidden');
+                    }
+                    
+                    if (status) {
+                        status.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>' + (data.message || 'New secret generated') + '</span>';
+                    }
+                } else {
+                    if (status) {
+                        status.innerHTML = '<span class="text-red-600">' + (data.error || 'Failed to generate secret') + '</span>';
+                    }
+                }
+            } catch (error) {
+                console.error('Error generating TOTP secret', error);
+                if (status) {
+                    status.innerHTML = '<span class="text-red-600">Error generating TOTP secret</span>';
+                }
+            }
+        }
+
+        async function previewTotpCode() {
+            try {
+                const response = await fetch('/api/xero/totp-code/preview');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert(`Current TOTP Code: ${data.code}\n\nThis code will expire in ${data.remainingSeconds} seconds.\n\nUse this code for manual login if needed.`);
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to generate code') + '\n\n' + (data.message || ''));
+                }
+            } catch (error) {
+                console.error('Error previewing TOTP code', error);
+                alert('Error generating TOTP code preview');
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const runBtn = document.getElementById('runAgentBtn');
             const stopBtn = document.getElementById('stopAgentBtn');
             const refreshBtn = document.getElementById('refreshStatusBtn');
             const clearLogsBtn = document.getElementById('clearLogsBtn');
+            const saveTotpBtn = document.getElementById('saveTotpSecretBtn');
+            const generateTotpBtn = document.getElementById('generateTotpSecretBtn');
+            const previewTotpBtn = document.getElementById('previewTotpCodeBtn');
 
             if (runBtn) {
                 runBtn.addEventListener('click', () => {
@@ -263,6 +475,21 @@
             if (clearLogsBtn) {
                 clearLogsBtn.addEventListener('click', clearLogs);
             }
+
+            if (saveTotpBtn) {
+                saveTotpBtn.addEventListener('click', saveTotpSecret);
+            }
+
+            if (generateTotpBtn) {
+                generateTotpBtn.addEventListener('click', generateTotpSecret);
+            }
+
+            if (previewTotpBtn) {
+                previewTotpBtn.addEventListener('click', previewTotpCode);
+            }
+
+            // Load TOTP secret status on page load
+            loadTotpSecret();
 
             // Initial status check
             refreshStatus();

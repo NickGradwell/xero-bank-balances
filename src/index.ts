@@ -2,12 +2,21 @@ import express from 'express';
 import path from 'path';
 import session from 'express-session';
 import { randomUUID } from 'crypto';
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
 import { config } from './config';
 import { logger } from './utils/logger';
 import { getAuthorizationUrl, exchangeCodeForToken, setTokenSet } from './services/xero/auth';
 import { XeroService } from './services/xero/client';
 import { XeroTokenSet, BankTransaction } from './types/xero';
 import { XeroLoginAgent } from './services/xero/loginAgent';
+
+// Configure authenticator for TOTP
+authenticator.options = {
+  digits: 6,
+  step: 30,
+  window: [1, 1],
+};
 import {
   initTransactionCache,
   getCachedTransactions,
@@ -964,8 +973,9 @@ app.post('/api/xero/login-agent/start', async (req, res): Promise<void> => {
     const { headless = true } = req.body as { headless?: boolean };
     const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
     const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+    const totpSecret = process.env.XERO_TOTP_SECRET || '';
 
-    activeLoginAgent = new XeroLoginAgent(username, password, headless);
+    activeLoginAgent = new XeroLoginAgent(username, password, headless, totpSecret || undefined);
 
     // Run login in background
     setImmediate(async () => {
@@ -1047,8 +1057,9 @@ app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
     const { headless = true } = req.body as { headless?: boolean };
     const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
     const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+    const totpSecret = process.env.XERO_TOTP_SECRET || '';
 
-    const agent = new XeroLoginAgent(username, password, headless);
+    const agent = new XeroLoginAgent(username, password, headless, totpSecret || undefined);
 
     try {
       const result = await agent.login();
@@ -1062,6 +1073,128 @@ app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
       success: false,
       message: 'Login agent error',
       error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// TOTP Secret Management endpoints
+app.get('/api/xero/totp-secret', async (_req, res): Promise<void> => {
+  try {
+    const secret = process.env.XERO_TOTP_SECRET || '';
+    // Return masked version if secret exists
+    res.json({
+      secret: secret ? '••••••••' : '',
+      configured: !!secret,
+    });
+  } catch (error) {
+    logger.error('Failed to get TOTP secret', { error });
+    res.status(500).json({
+      error: 'Failed to get TOTP secret',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/xero/totp-secret', async (req, res): Promise<void> => {
+  try {
+    const { secret } = req.body as { secret?: string };
+    
+    if (!secret || secret.trim() === '') {
+      res.status(400).json({
+        error: 'TOTP secret is required',
+      });
+      return;
+    }
+
+    // Validate secret format (should be base32)
+    try {
+      authenticator.generate(secret);
+    } catch (e) {
+      res.status(400).json({
+        error: 'Invalid TOTP secret format',
+        message: 'The secret must be a valid base32 encoded string',
+      });
+      return;
+    }
+
+    // In a real application, you'd save this to a secure storage (database, key vault, etc.)
+    // For now, we'll just return success - the user should set it as an environment variable
+    res.json({
+      success: true,
+      message: 'TOTP secret validated. Please set XERO_TOTP_SECRET environment variable with this value for production use.',
+      note: 'For security, set this as an environment variable rather than storing in code.',
+    });
+  } catch (error) {
+    logger.error('Failed to save TOTP secret', { error });
+    res.status(500).json({
+      error: 'Failed to save TOTP secret',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/xero/totp-secret/generate', async (_req, res): Promise<void> => {
+  try {
+    // Generate a new TOTP secret
+    const secret = authenticator.generateSecret();
+    
+    // Create QR code data URL for easy setup
+    const otpAuthUrl = authenticator.keyuri(
+      'nickg@amberleyinnovations.com',
+      'Xero',
+      secret
+    );
+    
+    let qrCodeDataUrl = '';
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(otpAuthUrl);
+    } catch (qrError) {
+      logger.warn('Failed to generate QR code', { error: qrError });
+    }
+
+    res.json({
+      secret,
+      qrCode: qrCodeDataUrl,
+      otpAuthUrl,
+      message: 'New TOTP secret generated. Scan the QR code with your authenticator app or enter the secret manually.',
+    });
+  } catch (error) {
+    logger.error('Failed to generate TOTP secret', { error });
+    res.status(500).json({
+      error: 'Failed to generate TOTP secret',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+app.get('/api/xero/totp-code/preview', async (_req, res): Promise<void> => {
+  try {
+    const secret = process.env.XERO_TOTP_SECRET || '';
+    
+    if (!secret) {
+      res.status(400).json({
+        error: 'TOTP secret is not configured',
+        message: 'Please configure your TOTP secret first',
+      });
+      return;
+    }
+
+    // Generate current code
+    const code = authenticator.generate(secret);
+    const step = authenticator.options.step || 30;
+    const remainingSeconds = step - (Math.floor(Date.now() / 1000) % step);
+
+    res.json({
+      code,
+      remainingSeconds,
+      step,
+      note: 'This code is for testing/login purposes only. It will expire in the remaining seconds shown.',
+    });
+  } catch (error) {
+    logger.error('Failed to generate TOTP code preview', { error });
+    res.status(500).json({
+      error: 'Failed to generate TOTP code',
+      message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 });

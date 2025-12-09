@@ -10,6 +10,7 @@ interface Config {
     scopes: string[];
     username?: string;
     password?: string;
+    totpSecret?: string;
   };
   app: {
     port: number;
@@ -33,6 +34,7 @@ export const config: Config = {
         ],
     username: process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com',
     password: process.env.XERO_PASSWORD || 'xeEspresso321!',
+    totpSecret: process.env.XERO_TOTP_SECRET || '',
   },
   app: {
     port: parseInt(process.env.PORT || '3000', 10),

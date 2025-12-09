@@ -1,5 +1,13 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
+import { authenticator } from 'otplib';
 import { logger } from '../../utils/logger';
+
+// Configure authenticator for TOTP (standard Google Authenticator settings)
+authenticator.options = {
+  digits: 6,
+  step: 30, // 30-second windows
+  window: [1, 1], // Allow 1 step before/after for clock skew
+};
 
 export interface LoginResult {
   success: boolean;
@@ -26,7 +34,8 @@ export class XeroLoginAgent {
   constructor(
     private username: string,
     private password: string,
-    private headless: boolean = true
+    private headless: boolean = true,
+    private totpSecret?: string
   ) {}
 
   private addLog(step: string, message: string, error?: string): void {
@@ -299,7 +308,149 @@ export class XeroLoginAgent {
       this.addLog('WAIT', 'Waiting for login to complete...');
       try {
         // Wait a bit for the page to process the login
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
+
+        // Check if we're on a 2FA page
+        const urlAfterSubmit = page.url();
+        const pageText = await page.textContent('body').catch(() => '') || '';
+        const lowerPageText = pageText.toLowerCase();
+        
+        const is2FAPage = urlAfterSubmit.includes('/2fa') || 
+                          urlAfterSubmit.includes('/two-factor') ||
+                          urlAfterSubmit.includes('/verify') ||
+                          urlAfterSubmit.includes('/authenticator') ||
+                          lowerPageText.includes('authenticator') ||
+                          lowerPageText.includes('two-factor') ||
+                          lowerPageText.includes('two factor') ||
+                          lowerPageText.includes('6-digit code') ||
+                          lowerPageText.includes('verification code') ||
+                          lowerPageText.includes('enter the code') ||
+                          lowerPageText.includes('enter code') ||
+                          lowerPageText.includes('security code');
+
+        if (is2FAPage && this.totpSecret) {
+          this.addLog('2FA', '2FA challenge detected, generating TOTP code...');
+          
+          // Generate the 6-digit code
+          const code = authenticator.generate(this.totpSecret);
+          this.addLog('2FA', `Generated TOTP code: ${code}`);
+          
+          // Find and fill the 2FA code input
+          const codeSelectors = [
+            'input[name="totp"]',
+            'input[name="code"]',
+            'input[name="verificationCode"]',
+            'input[name="twoFactorCode"]',
+            'input[placeholder*="code" i]',
+            'input[placeholder*="Code" i]',
+            'input[type="tel"]',
+            'input[inputmode="numeric"]',
+            'input[maxlength="6"]',
+            'input[data-testid*="code"]',
+            'input[data-testid*="totp"]',
+            'input[id*="code"]',
+            'input[id*="totp"]',
+          ];
+          
+          let codeFilled = false;
+          for (const selector of codeSelectors) {
+            try {
+              const codeField = page.locator(selector).first();
+              if (await codeField.isVisible({ timeout: 2000 })) {
+                await codeField.fill(code);
+                codeFilled = true;
+                this.addLog('2FA', `Filled 2FA code using selector: ${selector}`);
+                break;
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+          
+          if (!codeFilled) {
+            // Try getByLabel/getByPlaceholder as fallback
+            try {
+              await page.getByLabel(/code|verification/i).fill(code);
+              codeFilled = true;
+              this.addLog('2FA', 'Filled 2FA code using getByLabel');
+            } catch (e) {
+              try {
+                await page.getByPlaceholder(/code|verification/i).fill(code);
+                codeFilled = true;
+                this.addLog('2FA', 'Filled 2FA code using getByPlaceholder');
+              } catch (e2) {
+                throw new Error('Could not find 2FA code input field');
+              }
+            }
+          }
+          
+          // Click verify/continue button
+          const confirmSelectors = [
+            'button:has-text("Verify")',
+            'button:has-text("Continue")',
+            'button:has-text("Confirm")',
+            'button:has-text("Submit")',
+            'button[type="submit"]',
+            'form button[type="submit"]',
+            'button[data-testid*="verify"]',
+            'button[data-testid*="submit"]',
+            'button[id*="verify"]',
+            'button[id*="submit"]',
+          ];
+          
+          let submitted2FA = false;
+          for (const selector of confirmSelectors) {
+            try {
+              const btn = page.locator(selector).first();
+              if (await btn.isVisible({ timeout: 2000 })) {
+                await btn.click();
+                submitted2FA = true;
+                this.addLog('2FA', `Submitted 2FA code using selector: ${selector}`);
+                break;
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+          
+          if (!submitted2FA) {
+            // Try getByRole as fallback
+            try {
+              await page.getByRole('button', { name: /verify|continue|confirm|submit/i }).click();
+              submitted2FA = true;
+              this.addLog('2FA', 'Submitted 2FA code using getByRole');
+            } catch (e) {
+              // Last resort: press Enter on the form
+              try {
+                await page.keyboard.press('Enter');
+                submitted2FA = true;
+                this.addLog('2FA', 'Submitted 2FA code using Enter key');
+              } catch (e2) {
+                throw new Error('Could not find 2FA submit button');
+              }
+            }
+          }
+          
+          // Wait for navigation after 2FA submission
+          this.addLog('2FA', 'Waiting for 2FA verification to complete...');
+          await page.waitForTimeout(3000);
+          
+          // Check if login succeeded (should be redirected away from login/2FA pages)
+          const finalUrlAfter2FA = page.url();
+          if (finalUrlAfter2FA.includes('/login') || finalUrlAfter2FA.includes('/2fa') || finalUrlAfter2FA.includes('/verify') || finalUrlAfter2FA.includes('/authenticator')) {
+            // Check if there's an error message
+            const errorText = await page.textContent('body').catch(() => '') || '';
+            const lowerErrorText = errorText.toLowerCase();
+            if (lowerErrorText.includes('invalid') || lowerErrorText.includes('incorrect') || lowerErrorText.includes('wrong')) {
+              throw new Error('2FA verification failed - invalid code');
+            }
+            throw new Error('2FA verification may have failed - still on login/2FA page');
+          }
+          
+          this.addLog('2FA', `2FA verification successful, redirected to: ${finalUrlAfter2FA}`);
+        } else if (is2FAPage && !this.totpSecret) {
+          throw new Error('2FA challenge detected but no TOTP secret configured. Please configure your TOTP secret in the agent settings.');
+        }
 
         // Check for error messages on the page first
         const errorSelectors = [
