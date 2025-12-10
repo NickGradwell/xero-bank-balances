@@ -1069,8 +1069,9 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
       needsLogin = true;
       logger.info('No active agent or not logged in, creating new agent for bank statements collection');
       
+      // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
+      // (macOS can run headed browsers without DISPLAY set)
       const isServerEnvironment = 
-        !process.env.DISPLAY ||
         process.env.CI === 'true' ||
         process.env.RAILWAY_ENVIRONMENT !== undefined ||
         process.env.DYNO !== undefined ||
@@ -1137,8 +1138,9 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
   try {
     const { limit = 3, headless: requestedHeadless = true } = req.body as { limit?: number; headless?: boolean };
 
+    // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
+    // (macOS can run headed browsers without DISPLAY set)
     const isServerEnvironment =
-      !process.env.DISPLAY ||
       process.env.CI === 'true' ||
       process.env.RAILWAY_ENVIRONMENT !== undefined ||
       process.env.DYNO !== undefined ||
@@ -1147,21 +1149,33 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
 
     const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
 
+    logger.info('Starting account ID collection', {
+      limit,
+      requestedHeadless,
+      effectiveHeadless,
+      isServerEnvironment,
+      platform: process.platform,
+      DISPLAY: process.env.DISPLAY,
+    });
+
     const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
     const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
     const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
 
     const agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
+    activeLoginAgent = agent; // Set as active so logs can be polled
 
     const loginResult = await agent.login();
     if (!loginResult.success) {
       await agent.close();
+      activeLoginAgent = null;
       res.status(500).json({ success: false, error: loginResult.error || 'Login failed' });
       return;
     }
 
     const collectResult = await agent.collectAccountIds(limit);
     await agent.close();
+    activeLoginAgent = null;
 
     if (collectResult.accounts.length) {
       const nowIso = new Date().toISOString();
@@ -1207,8 +1221,9 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
       return;
     }
 
+    // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
+    // (macOS can run headed browsers without DISPLAY set)
     const isServerEnvironment =
-      !process.env.DISPLAY ||
       process.env.CI === 'true' ||
       process.env.RAILWAY_ENVIRONMENT !== undefined ||
       process.env.DYNO !== undefined ||
@@ -1284,9 +1299,9 @@ app.post('/api/xero/login-agent/run', async (req, res): Promise<void> => {
   try {
     const { headless: requestedHeadless = true } = req.body as { headless?: boolean };
     
-    // Force headless mode on server environments
+    // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
+    // (macOS can run headed browsers without DISPLAY set)
     const isServerEnvironment = 
-      !process.env.DISPLAY ||
       process.env.CI === 'true' ||
       process.env.RAILWAY_ENVIRONMENT !== undefined ||
       process.env.DYNO !== undefined ||

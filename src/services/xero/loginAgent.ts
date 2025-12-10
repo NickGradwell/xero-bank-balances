@@ -127,15 +127,15 @@ export class XeroLoginAgent {
     }
 
     try {
-      // Force headless mode on server environments (Railway, Docker, CI, etc.)
+      // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
+      // (macOS can run headed browsers without DISPLAY set)
       // Check for common server environment indicators
       const isServerEnvironment = 
-        !process.env.DISPLAY || // No X server
         process.env.CI === 'true' || // CI environment
         process.env.RAILWAY_ENVIRONMENT !== undefined || // Railway
         process.env.DYNO !== undefined || // Heroku
         process.env.VERCEL !== undefined || // Vercel
-        process.platform === 'linux' && !process.env.DISPLAY; // Linux without display
+        (process.platform === 'linux' && !process.env.DISPLAY); // Linux without display
       
       const effectiveHeadless = isServerEnvironment ? true : this.headless;
       
@@ -170,6 +170,11 @@ export class XeroLoginAgent {
         headless: effectiveHeadless,
         args: launchArgs,
       });
+
+      this.addLog('INIT', `Browser launched successfully in ${effectiveHeadless ? 'headless' : 'headed'} mode`);
+      if (!effectiveHeadless) {
+        this.addLog('INIT', 'Browser window should be visible. If not, check your system display settings.');
+      }
 
       this.context = await this.browser.newContext({
         viewport: { width: 1280, height: 720 },
@@ -1012,86 +1017,132 @@ export class XeroLoginAgent {
     const accounts: AccountIdResult[] = [];
     const errors: string[] = [];
 
-    this.addLog('ACCOUNTS', 'Looking for account headings...');
+    this.addLog('ACCOUNTS', `Starting account ID collection (limit: ${limit})...`);
+    this.addLog('ACCOUNTS', `Current URL: ${page.url()}`);
+    
+    // Check if we're on the dashboard/home page
+    const currentUrl = page.url();
+    if (!currentUrl.includes('go.xero.com') || currentUrl.includes('/login')) {
+      this.addLog('ACCOUNTS', 'Not on dashboard, navigating to home...');
+      await this.navigateToHome();
+      await page.waitForTimeout(2000);
+    }
+
+    this.addLog('ACCOUNTS', 'Looking for account headings (h2.mf-bank-widget-heading-large)...');
     try {
       await page.waitForSelector('h2.mf-bank-widget-heading-large', { timeout: 60000 });
+      this.addLog('ACCOUNTS', 'Account headings found!');
     } catch (e) {
-      this.addLog('ACCOUNTS', 'Timed out waiting for account headings');
-      return { success: false, accounts, errors: ['Timed out waiting for account headings'] };
+      const errorMsg = `Timed out waiting for account headings after 60s. Current URL: ${page.url()}`;
+      this.addLog('ACCOUNTS', errorMsg, errorMsg);
+      // Try to take a screenshot for debugging
+      try {
+        await page.screenshot({ path: undefined, fullPage: false });
+        this.addLog('ACCOUNTS', 'Screenshot captured for debugging');
+      } catch (screenshotError) {
+        this.addLog('ACCOUNTS', `Screenshot failed: ${screenshotError instanceof Error ? screenshotError.message : 'Unknown'}`);
+      }
+      return { success: false, accounts, errors: [errorMsg] };
     }
 
     const headings = await page.locator('h2.mf-bank-widget-heading-large').all();
+    this.addLog('ACCOUNTS', `Found ${headings.length} account headings, processing first ${limit}...`);
     const toProcess = headings.slice(0, limit);
 
-    for (const heading of toProcess) {
+    for (let i = 0; i < toProcess.length; i++) {
+      const heading = toProcess[i];
       try {
+        this.addLog('ACCOUNTS', `Processing heading ${i + 1}/${toProcess.length}...`);
         const nameText = (await heading.textContent()) || '';
         const accountName = nameText.trim().replace(/\s+\(\d+\)\s*$/, '');
+        this.addLog('ACCOUNTS', `Found account name: "${accountName}"`);
 
         // Try to find an href with accountID near this heading
         let accountId: string | null = null;
 
         // 1) closest ancestor link
+        this.addLog('ACCOUNTS', `  Method 1: Checking ancestor link...`);
         const ancestorLink = heading.locator('xpath=ancestor::a[1]');
         try {
           if (await ancestorLink.count()) {
             const href = await ancestorLink.getAttribute('href');
+            this.addLog('ACCOUNTS', `  Found ancestor href: ${href || 'null'}`);
             if (href && href.includes('accountID=')) {
               const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
-              if (match) accountId = match[1];
+              if (match) {
+                accountId = match[1];
+                this.addLog('ACCOUNTS', `  ✓ Found accountID via ancestor: ${accountId}`);
+              }
             }
+          } else {
+            this.addLog('ACCOUNTS', `  No ancestor link found`);
           }
         } catch (e) {
-          // ignore
+          this.addLog('ACCOUNTS', `  Error checking ancestor: ${e instanceof Error ? e.message : 'Unknown'}`);
         }
 
         // 2) search within the card block
         if (!accountId) {
+          this.addLog('ACCOUNTS', `  Method 2: Checking card block links...`);
           try {
             const cardLink = heading.locator('xpath=ancestor::*[self::div or self::li][1]').locator('a[href*="accountID="]').first();
             if (await cardLink.count()) {
               const href = await cardLink.getAttribute('href');
+              this.addLog('ACCOUNTS', `  Found card href: ${href || 'null'}`);
               if (href && href.includes('accountID=')) {
                 const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
-                if (match) accountId = match[1];
+                if (match) {
+                  accountId = match[1];
+                  this.addLog('ACCOUNTS', `  ✓ Found accountID via card: ${accountId}`);
+                }
               }
+            } else {
+              this.addLog('ACCOUNTS', `  No card link found`);
             }
           } catch (e) {
-            // ignore
+            this.addLog('ACCOUNTS', `  Error checking card: ${e instanceof Error ? e.message : 'Unknown'}`);
           }
         }
 
         // 3) global fallback search by text
         if (!accountId) {
+          this.addLog('ACCOUNTS', `  Method 3: Searching by account name text...`);
           try {
             const linkByText = page.locator(`a:has-text("${accountName}")`).filter({ has: page.locator('a[href*="accountID="]') }).first();
             if (await linkByText.count()) {
               const href = await linkByText.getAttribute('href');
+              this.addLog('ACCOUNTS', `  Found text link href: ${href || 'null'}`);
               if (href && href.includes('accountID=')) {
                 const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
-                if (match) accountId = match[1];
+                if (match) {
+                  accountId = match[1];
+                  this.addLog('ACCOUNTS', `  ✓ Found accountID via text search: ${accountId}`);
+                }
               }
+            } else {
+              this.addLog('ACCOUNTS', `  No text link found`);
             }
           } catch (e) {
-            // ignore
+            this.addLog('ACCOUNTS', `  Error checking text link: ${e instanceof Error ? e.message : 'Unknown'}`);
           }
         }
 
         if (accountId) {
           accounts.push({ accountId, accountName });
-          this.addLog('ACCOUNTS', `Captured account: ${accountName} (${accountId})`);
+          this.addLog('ACCOUNTS', `✓ Successfully captured account: ${accountName} (ID: ${accountId})`);
         } else {
-          const msg = `Could not find accountID for ${accountName}`;
+          const msg = `Could not find accountID for "${accountName}" after trying all methods`;
           errors.push(msg);
-          this.addLog('ACCOUNTS', msg, msg);
+          this.addLog('ACCOUNTS', `✗ ${msg}`, msg);
         }
       } catch (e) {
-        const msg = `Error processing heading: ${e instanceof Error ? e.message : 'Unknown error'}`;
+        const msg = `Error processing heading ${i + 1}: ${e instanceof Error ? e.message : 'Unknown error'}`;
         errors.push(msg);
-        this.addLog('ACCOUNTS', msg, msg);
+        this.addLog('ACCOUNTS', `✗ ${msg}`, msg);
       }
     }
 
+    this.addLog('ACCOUNTS', `Collection complete: ${accounts.length} accounts captured, ${errors.length} errors`);
     return { success: accounts.length > 0, accounts, errors: errors.length ? errors : undefined };
   }
 

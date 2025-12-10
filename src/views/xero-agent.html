@@ -597,13 +597,44 @@
         let collectionLogInterval = null;
         let storedAccounts = [];
 
+        let accountCollectionInProgress = false;
+        let accountCollectionLogInterval: number | null = null;
+
         async function collectAccountIds() {
+            if (accountCollectionInProgress) {
+                alert('Account collection is already in progress');
+                return;
+            }
+
             const limitInput = document.getElementById('accountLimit');
             const limit = limitInput ? parseInt(limitInput.value) || 3 : 3;
             const headlessCheckbox = document.getElementById('headlessModeAccounts');
             const headless = headlessCheckbox ? headlessCheckbox.checked : true;
+            
+            accountCollectionInProgress = true;
+            addLogMessage('ACCOUNTS', `Starting account ID collection (limit: ${limit}, headless mode: ${headless})...`, null);
+            if (!headless) {
+                addLogMessage('ACCOUNTS', '⚠️ Headless mode is OFF - browser window should appear!', null);
+            }
 
-            addLogMessage('ACCOUNTS', `Collecting account IDs (limit: ${limit}, headless: ${headless})...`, null);
+            // Start polling for logs during collection
+            if (accountCollectionLogInterval) {
+                clearInterval(accountCollectionLogInterval);
+            }
+            accountCollectionLogInterval = window.setInterval(async () => {
+                try {
+                    const statusResponse = await fetch('/api/xero/login-agent/status');
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        if (statusData.logs && statusData.logs.length > 0) {
+                            updateLogs(statusData.logs);
+                        }
+                    }
+                } catch (e) {
+                    // Ignore polling errors
+                }
+            }, 1000); // Poll every second
+
             try {
                 const response = await fetch('/api/xero/accounts/collect', {
                     method: 'POST',
@@ -612,15 +643,27 @@
                 });
                 const result = await response.json();
 
+                // Stop polling
+                if (accountCollectionLogInterval) {
+                    clearInterval(accountCollectionLogInterval);
+                    accountCollectionLogInterval = null;
+                }
+
                 if (response.ok && result.success) {
-                    addLogMessage('ACCOUNTS', `Collected ${result.accounts?.length || 0} accounts`, null);
+                    addLogMessage('ACCOUNTS', `✓ Successfully collected ${result.accounts?.length || 0} accounts`, null);
                     await refreshStoredAccounts();
                 } else {
                     addLogMessage('ERROR', `Failed to collect accounts: ${result.error || result.message || 'Unknown error'}`, result.error);
                     alert('Failed to collect account IDs');
                 }
             } catch (error) {
+                if (accountCollectionLogInterval) {
+                    clearInterval(accountCollectionLogInterval);
+                    accountCollectionLogInterval = null;
+                }
                 addLogMessage('ERROR', `Collect account IDs error: ${error instanceof Error ? error.message : 'Unknown error'}`, error instanceof Error ? error.message : 'Unknown error');
+            } finally {
+                accountCollectionInProgress = false;
             }
         }
 
