@@ -1055,7 +1055,7 @@ app.post('/api/xero/login-agent/stop', async (_req, res): Promise<void> => {
 // Bank Statements Collection endpoint
 app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> => {
   try {
-    const { limit = 3 } = req.body as { limit?: number };
+    const { limit = 3, headless: requestedHeadless = true } = req.body as { limit?: number; headless?: boolean };
     
     // Use existing agent if available and logged in, otherwise create new one
     let agent = activeLoginAgent;
@@ -1073,7 +1073,7 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
         process.env.VERCEL !== undefined ||
         (process.platform === 'linux' && !process.env.DISPLAY);
       
-      const effectiveHeadless = isServerEnvironment ? true : true; // Default to headless for collection
+      const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
       
       const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
       const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
@@ -1101,7 +1101,7 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
 
       // Collect bank statements
       // Keep agent active so logs can be polled during collection
-      logger.info(`Starting bank statements collection (limit: ${limit})`);
+      logger.info(`Starting bank statements collection (limit: ${limit}, headless: ${requestedHeadless})`);
       const result = await agent.collectBankStatements(limit);
       
       // Don't close the agent - keep it active so user can see logs and potentially collect more

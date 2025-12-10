@@ -94,25 +94,6 @@
             </div>
         </div>
 
-        <!-- Control Panel -->
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 class="text-xl font-semibold text-gray-800 mb-4">Agent Controls</h2>
-            <div class="flex gap-4 items-center">
-                <button id="runAgentBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors">
-                    <i class="fas fa-play mr-2"></i>Run Login Agent
-                </button>
-                <button id="stopAgentBtn" class="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg transition-colors" disabled>
-                    <i class="fas fa-stop mr-2"></i>Stop Agent
-                </button>
-                <button id="refreshStatusBtn" class="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg transition-colors">
-                    <i class="fas fa-sync-alt mr-2"></i>Refresh Status
-                </button>
-                <div class="flex items-center gap-2 ml-auto">
-                    <input type="checkbox" id="headlessMode" class="h-4 w-4 text-blue-600 border-gray-300 rounded" checked>
-                    <label for="headlessMode" class="text-sm text-gray-700">Headless Mode</label>
-                </div>
-            </div>
-        </div>
 
         <!-- Status Display -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -132,11 +113,20 @@
 
         <!-- Bank Statements Collection -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 class="text-xl font-semibold text-gray-800 mb-4">
-                <i class="fas fa-file-invoice-dollar mr-2 text-green-600"></i>Bank Statements Collection
-            </h2>
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-800">
+                        <i class="fas fa-file-invoice-dollar mr-2 text-green-600"></i>Bank Statements Collection
+                    </h2>
+                    <p class="text-gray-600 text-sm">Run the agent to collect bank statements (first N accounts).</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="headlessMode" class="h-4 w-4 text-blue-600 border-gray-300 rounded" checked>
+                    <label for="headlessMode" class="text-sm text-gray-700">Headless Mode</label>
+                </div>
+            </div>
             <div class="space-y-4">
-                <div class="flex gap-4 items-center">
+                <div class="flex gap-4 items-center flex-wrap">
                     <div class="flex items-center gap-2">
                         <label for="collectionLimit" class="text-sm font-medium text-gray-700">Number of accounts:</label>
                         <input 
@@ -580,6 +570,8 @@
 
             const limitInput = document.getElementById('collectionLimit');
             const limit = limitInput ? parseInt(limitInput.value) || 3 : 3;
+            const headlessCheckbox = document.getElementById('headlessMode');
+            const headless = headlessCheckbox ? headlessCheckbox.checked : true;
             const collectBtn = document.getElementById('collectStatementsBtn');
             const stopBtn = document.getElementById('stopCollectionBtn');
             const progressDiv = document.getElementById('collectionProgress');
@@ -614,12 +606,12 @@
 
             try {
                 // Add initial log message
-                addLogMessage('COLLECT', 'Starting bank statements collection...', null);
+                addLogMessage('COLLECT', `Starting bank statements collection (headless: ${headless})...`, null);
 
                 const response = await fetch('/api/xero/bank-statements/collect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ limit }),
+                    body: JSON.stringify({ limit, headless }),
                 });
 
                 const result = await response.json();
