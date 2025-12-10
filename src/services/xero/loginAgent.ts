@@ -868,19 +868,23 @@ export class XeroLoginAgent {
 
           // Look for "Bank Statements" link
           this.addLog('COLLECT', `Looking for "Bank Statements" link...`);
-          // Wait for account page to settle (up to 30s) and look for the Bank statements tab
-          this.addLog('COLLECT', 'Looking for "Bank statements" tab...');
+          // Look for explicit Bank statements tab/link
+          this.addLog('COLLECT', 'Looking for "Bank statements" tab/link...');
+          let bankStatementsTab = page.locator('a[href*="Bank/Statements.aspx"]', { hasText: /bank statements/i }).first();
           try {
-            await page.waitForSelector('a:has-text("Bank statements"), button:has-text("Bank statements")', { timeout: 30000 });
+            if (!(await bankStatementsTab.isVisible({ timeout: 15000 }))) {
+              // fallback to generic text
+              bankStatementsTab = page.locator('a:has-text("Bank statements"), button:has-text("Bank statements")').first();
+              await bankStatementsTab.waitFor({ timeout: 15000 });
+            }
           } catch (e) {
             this.addLog('COLLECT', 'Bank statements tab not immediately visible, continuing to search...');
           }
 
-          const bankStatementsTab = page.locator('a:has-text("Bank statements"), button:has-text("Bank statements")').first();
           try {
             await bankStatementsTab.scrollIntoViewIfNeeded();
             await page.waitForTimeout(200);
-            await bankStatementsTab.click({ timeout: 10000, force: true });
+            await bankStatementsTab.click({ timeout: 15000, force: true });
             this.addLog('COLLECT', 'Clicked "Bank statements" tab');
           } catch (e) {
             const errorMsg = `Failed to click "Bank statements" tab for account "${accountName}"`;
@@ -888,6 +892,14 @@ export class XeroLoginAgent {
             errors.push(errorMsg);
             await this.navigateToHome();
             continue;
+          }
+
+          // Wait for navigation to statements page
+          try {
+            await page.waitForURL(/Bank\/Statements\.aspx/i, { timeout: 30000 });
+            this.addLog('COLLECT', 'Navigated to Bank statements page');
+          } catch (e) {
+            this.addLog('COLLECT', 'URL did not change to Bank statements, continuing to look for table');
           }
 
           // Click on "Bank statements" tab (already located as bankStatementsTab)
@@ -905,11 +917,11 @@ export class XeroLoginAgent {
             continue;
           }
 
-          // Wait for table to load (specific table) up to 30s
+          // Wait for table to load (specific table) up to 45s
           this.addLog('COLLECT', `Waiting for statements table to load...`);
           await page.waitForTimeout(3000); // start loading
           try {
-            await page.waitForSelector('table#statementDetails.standard[data-automationid="statementGrid"]', { timeout: 30000 });
+            await page.waitForSelector('table#statementDetails.standard[data-automationid="statementGrid"]', { timeout: 45000 });
             this.addLog('COLLECT', 'Statement table found, waiting for data...');
             await page.waitForTimeout(3000); // Additional wait for data
           } catch (e) {

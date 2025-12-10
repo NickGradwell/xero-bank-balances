@@ -1,6 +1,6 @@
 {
   "name": "xero-bank-balances",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Display balances of all connected bank accounts in a Xero account",
   "main": "dist/index.js",
   "scripts": {
