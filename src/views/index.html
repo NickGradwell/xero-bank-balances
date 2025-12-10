@@ -749,11 +749,20 @@
             }).join('');
         }
 
-        function viewAccountTransactions(accountId, accountIndex) {
+        async function viewAccountTransactions(accountId, accountIndex) {
             const account = allAccountsData[accountIndex];
-            if (!account) return;
+            if (!account) {
+                console.error('Account not found at index', accountIndex);
+                return;
+            }
 
             const statements = account.statements || [];
+            console.log('Viewing transactions for account:', account.accountName, 'Statements count:', statements.length, 'Sample:', statements[0]);
+            
+            if (statements.length === 0) {
+                alert('No transactions available for this account');
+                return;
+            }
             
             // Sort by date descending (latest first)
             const sortedStatements = [...statements].sort((a, b) => {
@@ -814,40 +823,80 @@
                 `;
                 document.body.insertAdjacentHTML('beforeend', modalHtml);
                 modal = document.getElementById('accountTransactionsModal');
+                // Wait a tiny bit for DOM to be ready
+                await new Promise(resolve => setTimeout(resolve, 10));
             }
 
-            document.getElementById('modalAccountName').textContent = account.accountName || account.accountId;
-            document.getElementById('modalTransactionCount').textContent = `${sortedStatements.length} transactions`;
+            const modalAccountNameEl = document.getElementById('modalAccountName');
+            const modalTransactionCountEl = document.getElementById('modalTransactionCount');
+            
+            if (modalAccountNameEl) {
+                modalAccountNameEl.textContent = account.accountName || account.accountId;
+            }
+            if (modalTransactionCountEl) {
+                modalTransactionCountEl.textContent = `${sortedStatements.length} transactions`;
+            }
 
             // Store current account data for download
             window.currentAccountData = { accountId, accountName: account.accountName, statements: sortedStatements };
 
-            // Render transactions
-            renderTransactionsTable(sortedStatements);
-            
-            modal.classList.remove('hidden');
+            // Render transactions - ensure tbody exists
+            const tbody = document.getElementById('transactionsTableBody');
+            if (!tbody) {
+                console.error('transactionsTableBody not found after modal creation');
+                // Try again after a short delay
+                setTimeout(() => {
+                    renderTransactionsTable(sortedStatements);
+                    if (modal) modal.classList.remove('hidden');
+                }, 100);
+            } else {
+                renderTransactionsTable(sortedStatements);
+                if (modal) modal.classList.remove('hidden');
+            }
         }
 
         let dateSortDirection = 'desc'; // 'desc' or 'asc'
 
         function renderTransactionsTable(statements) {
+            console.log('renderTransactionsTable called with', statements.length, 'statements');
+            console.log('Sample statement:', statements[0]);
+            
             currentTransactions = statements;
             const tbody = document.getElementById('transactionsTableBody');
-            if (!tbody) return;
+            if (!tbody) {
+                console.error('transactionsTableBody not found!');
+                return;
+            }
 
-            tbody.innerHTML = statements.map(stmt => {
-                const date = stmt.statementDate ? new Date(stmt.statementDate).toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' }) : '';
+            if (!statements || statements.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-3 text-center text-gray-500">No transactions found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = statements.map((stmt, index) => {
+                // Handle both possible property names
+                const date = stmt.statementDate || stmt.date || '';
+                const description = stmt.description || '';
+                const reference = stmt.reference || '';
+                const spent = stmt.spent || '';
+                const received = stmt.received || '';
+                const balance = stmt.balance || '';
+                
+                const formattedDate = date ? new Date(date).toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' }) : '';
+                
                 return `
-                    <tr class="hover:bg-gray-50 transaction-row" data-date="${stmt.statementDate || ''}">
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${escapeHtml(date)}</td>
-                        <td class="px-4 py-3 text-sm text-gray-900">${escapeHtml(stmt.description || '')}</td>
-                        <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(stmt.reference || '')}</td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(stmt.spent || '')}</td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(stmt.received || '')}</td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(stmt.balance || '')}</td>
+                    <tr class="hover:bg-gray-50 transaction-row" data-date="${date}">
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${escapeHtml(formattedDate)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-900">${escapeHtml(description)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(reference)}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(spent)}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(received)}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(balance)}</td>
                     </tr>
                 `;
             }).join('');
+            
+            console.log('Rendered', statements.length, 'rows');
         }
 
         function sortTransactionsByDate() {
