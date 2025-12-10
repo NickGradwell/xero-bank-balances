@@ -1235,23 +1235,39 @@ export class XeroLoginAgent {
       const nameLabel = accountName || accountId;
       try {
         this.addLog('COLLECT_ID', `Navigating to statements for ${nameLabel} (${accountId})`);
-        // Use accountId (lowercase 'd') as that's what Xero uses in the URLs
-        const url = `https://go.xero.com/Bank/Statements.aspx?accountId=${accountId}`;
+        // Use BankTransactions.aspx with pageSize=200 and descending date order
+        const url = `https://go.xero.com/Bank/BankTransactions.aspx?accountID=${accountId}&pageSize=200&orderby=TransactionDate&direction=DESC`;
         this.addLog('COLLECT_ID', `Navigating to: ${url}`);
         try {
-          await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-          this.addLog('COLLECT_ID', `Navigation complete, waiting for page to load...`);
-          await page.waitForTimeout(3000);
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          this.addLog('COLLECT_ID', `Navigation complete, waiting for table to load...`);
         } catch (e) {
           this.addLog('COLLECT_ID', `Navigation error: ${e instanceof Error ? e.message : 'Unknown'}, continuing...`);
-          await page.waitForTimeout(3000);
         }
 
-        try {
-          await page.waitForSelector('table#statementDetails.standard[data-automationid="statementGrid"]', { timeout: 45000 });
-          this.addLog('COLLECT_ID', 'Statement table found, extracting rows...');
-        } catch (e) {
-          const msg = `Table did not load for account ${nameLabel}`;
+        // Poll for table every 5 seconds instead of waiting 60s
+        let tableFound = false;
+        const maxAttempts = 12; // 12 attempts * 5 seconds = 60 seconds max
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            const table = await page.locator('table#statementDetails.standard[data-automationid="statementGrid"]').first();
+            if (await table.count() > 0) {
+              tableFound = true;
+              this.addLog('COLLECT_ID', `Statement table found after ${attempt * 5} seconds, extracting rows...`);
+              break;
+            }
+          } catch (e) {
+            // Table not found yet
+          }
+          
+          if (attempt < maxAttempts) {
+            this.addLog('COLLECT_ID', `Waiting for table... (attempt ${attempt}/${maxAttempts})`);
+            await page.waitForTimeout(5000);
+          }
+        }
+
+        if (!tableFound) {
+          const msg = `Table did not load for account ${nameLabel} after ${maxAttempts * 5} seconds`;
           errors.push(msg);
           this.addLog('COLLECT_ID', msg, msg);
           continue;

@@ -224,6 +224,13 @@ export async function initTransactionCache(): Promise<void> {
       );
     `);
 
+    // Add unique constraint to prevent duplicates based on transaction details
+    await database.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_unique 
+      ON bank_statement_lines(account_id, statement_date, description, reference, spent, received, balance)
+      WHERE statement_date IS NOT NULL;
+    `);
+
     await database.query(`CREATE INDEX IF NOT EXISTS idx_bank_statement_account ON bank_statement_lines(account_id, created_at DESC);`);
     await database.query(`CREATE INDEX IF NOT EXISTS idx_bank_statement_date ON bank_statement_lines(statement_date);`);
 
@@ -298,7 +305,8 @@ export async function insertBankStatementLines(lines: BankStatementLine[]): Prom
       id, account_id, account_name, statement_date, description, reference, payment_ref,
       spent, received, balance, source, status, raw_json
     ) VALUES ${chunks.join(', ')}
-    ON CONFLICT (id) DO NOTHING
+    ON CONFLICT (account_id, statement_date, description, reference, spent, received, balance) 
+    DO NOTHING
   `;
   await database.query(sql, values);
 }
