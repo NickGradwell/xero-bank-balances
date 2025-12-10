@@ -1303,6 +1303,96 @@ export class XeroLoginAgent {
           continue;
         }
 
+        // Select 200 items per page from the dropdown
+        this.addLog('COLLECT_ID', 'Selecting 200 items per page from dropdown...');
+        try {
+          // Wait a bit for page to fully load
+          await page.waitForTimeout(1000);
+          
+          // Strategy 1: Find all select elements and check which one has option value 200
+          let dropdownFound = false;
+          try {
+            const allSelects = await page.locator('select').all();
+            for (const select of allSelects) {
+              try {
+                const options = await select.locator('option').all();
+                let has200 = false;
+                for (const option of options) {
+                  const value = await option.getAttribute('value');
+                  const text = await option.textContent();
+                  if (value === '200' || text?.trim() === '200') {
+                    has200 = true;
+                    break;
+                  }
+                }
+                if (has200) {
+                  await select.selectOption({ value: '200' });
+                  this.addLog('COLLECT_ID', 'Selected 200 items per page by finding select with option 200');
+                  dropdownFound = true;
+                  // Wait for page to reload with new page size
+                  await page.waitForTimeout(3000);
+                  break;
+                }
+              } catch (e) {
+                // Continue to next select
+              }
+            }
+          } catch (e) {
+            // Try alternative approach
+          }
+          
+          // Strategy 2: Try finding by text "items per page" or "per page"
+          if (!dropdownFound) {
+            try {
+              const itemsPerPageText = page.locator('text=/items per page/i, text=/per page/i').first();
+              if (await itemsPerPageText.count() > 0) {
+                // Find the select element near this text - look in parent containers
+                const parent = await itemsPerPageText.locator('xpath=ancestor::*[self::div or self::span or self::td][1]').first();
+                const select = parent.locator('select').first();
+                if (await select.count() > 0) {
+                  await select.selectOption({ value: '200' });
+                  this.addLog('COLLECT_ID', 'Selected 200 items per page by finding "items per page" text');
+                  await page.waitForTimeout(3000);
+                  dropdownFound = true;
+                }
+              }
+            } catch (e) {
+              // Continue
+            }
+          }
+          
+          // Strategy 3: Try specific selectors
+          if (!dropdownFound) {
+            const dropdownSelectors = [
+              'select[name*="pageSize"]',
+              'select[id*="pageSize"]',
+              'select[name*="PageSize"]',
+              'select[id*="PageSize"]',
+            ];
+            
+            for (const selector of dropdownSelectors) {
+              try {
+                const dropdown = page.locator(selector).first();
+                if (await dropdown.count() > 0) {
+                  await dropdown.selectOption({ value: '200' });
+                  this.addLog('COLLECT_ID', `Selected 200 items per page using selector: ${selector}`);
+                  dropdownFound = true;
+                  await page.waitForTimeout(3000);
+                  break;
+                }
+              } catch (e) {
+                // Try next selector
+              }
+            }
+          }
+          
+          if (!dropdownFound) {
+            this.addLog('COLLECT_ID', 'Warning: Could not find items per page dropdown, continuing with default page size');
+          }
+        } catch (e) {
+          this.addLog('COLLECT_ID', `Error selecting items per page: ${e instanceof Error ? e.message : 'Unknown'}, continuing...`);
+        }
+
         const lines: BankStatementRow[] = [];
         const tableSelector = foundSelector || 'table#statementDetails';
         let pageNumber = 1;

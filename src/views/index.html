@@ -62,18 +62,18 @@
             </button>
         </div>
 
-        <!-- Bank Accounts Grid -->
+        <!-- Bank Accounts with Statement Lines -->
         <div id="accountsContainer" class="hidden">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-semibold text-gray-800">
-                    Bank Accounts (<span id="accountsCount">0</span>)
+                    Bank Statement Lines (<span id="accountsCount">0</span> accounts, <span id="statementsCount">0</span> transactions)
                 </h2>
                 <button onclick="loadBankAccounts()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
                     <i class="fas fa-sync-alt mr-1"></i>Refresh
                 </button>
             </div>
-            <div id="accountsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                <!-- Bank account cards will be inserted here -->
+            <div id="accountsGrid" class="space-y-6">
+                <!-- Bank account statement sections will be inserted here -->
             </div>
         </div>
 
@@ -665,7 +665,7 @@
             if (errorState) errorState.classList.add('hidden');
 
             try {
-                const response = await fetch('/api/xero/accounts');
+                const response = await fetch('/api/xero/statements/by-account');
                 const data = await response.json();
 
                 if (response.status === 401) {
@@ -674,69 +674,90 @@
                 }
 
                 if (!response.ok) {
-                    throw new Error(data.message || 'Failed to fetch bank accounts');
+                    throw new Error(data.message || 'Failed to fetch bank statement lines');
                 }
 
                 if (loadingState) loadingState.classList.add('hidden');
 
-                if (Array.isArray(data.accounts) && data.accounts.length > 0) {
+                if (data.success && Array.isArray(data.accounts) && data.accounts.length > 0) {
                     displayBankAccounts(data.accounts);
                     if (accountsContainer) accountsContainer.classList.remove('hidden');
                 } else if (noAccountsState) {
                     noAccountsState.classList.remove('hidden');
                 }
             } catch (error) {
-                console.error('Error loading bank accounts', error);
+                console.error('Error loading bank statement lines', error);
                 if (loadingState) loadingState.classList.add('hidden');
                 if (errorState) errorState.classList.remove('hidden');
-                if (errorMessage) errorMessage.textContent = error instanceof Error ? error.message : 'Failed to load bank accounts. Please try again.';
+                if (errorMessage) errorMessage.textContent = error instanceof Error ? error.message : 'Failed to load bank statement lines. Please try again.';
             }
         }
 
         function displayBankAccounts(accounts) {
             const grid = document.getElementById('accountsGrid');
             const countElement = document.getElementById('accountsCount');
+            const statementsCountElement = document.getElementById('statementsCount');
             if (!grid || !countElement) return;
 
+            const totalStatements = accounts.reduce((sum, acc) => sum + (acc.statements?.length || 0), 0);
             countElement.textContent = accounts.length;
+            if (statementsCountElement) {
+                statementsCountElement.textContent = totalStatements;
+            }
 
-            grid.innerHTML = accounts.map(account => `
-                <div onclick="showTransactions('${escapeHtml(account.accountId)}', '${escapeHtml(account.name)}', '${escapeHtml(account.code)}')" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow cursor-pointer">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center">
-                            <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mr-3">
-                                <i class="fas fa-university text-blue-600"></i>
-                            </div>
-                            <div>
-                                <h3 class="text-lg font-semibold text-gray-800">${escapeHtml(account.name)}</h3>
-                                <p class="text-sm text-gray-500">${escapeHtml(account.code || 'N/A')}</p>
+            grid.innerHTML = accounts.map(account => {
+                const statements = account.statements || [];
+                const lastCollected = account.lastCollectedAt ? new Date(account.lastCollectedAt).toLocaleDateString() : 'Never';
+                
+                return `
+                    <div class="bg-white rounded-lg shadow-md p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center">
+                                <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mr-3">
+                                    <i class="fas fa-university text-blue-600"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-gray-800">${escapeHtml(account.accountName || account.accountId)}</h3>
+                                    <p class="text-sm text-gray-500">${statements.length} transactions • Last collected: ${lastCollected}</p>
+                                </div>
                             </div>
                         </div>
-                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${account.status === 'ACTIVE' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
-                            ${escapeHtml(account.status || 'UNKNOWN')}
-                        </span>
+                        ${statements.length > 0 ? `
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full divide-y divide-gray-200">
+                                    <thead class="bg-gray-50">
+                                        <tr>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
+                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Spent</th>
+                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Received</th>
+                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Balance</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="bg-white divide-y divide-gray-200">
+                                        ${statements.map(stmt => `
+                                            <tr class="hover:bg-gray-50">
+                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${escapeHtml(stmt.statementDate || '')}</td>
+                                                <td class="px-4 py-3 text-sm text-gray-900">${escapeHtml(stmt.description || '')}</td>
+                                                <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(stmt.reference || '')}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(stmt.spent || '')}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(stmt.received || '')}</td>
+                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(stmt.balance || '')}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : `
+                            <div class="text-center py-8 text-gray-500">
+                                <i class="fas fa-inbox text-4xl mb-2"></i>
+                                <p>No statement lines collected yet for this account</p>
+                            </div>
+                        `}
                     </div>
-                    <div class="border-t border-gray-200 pt-4">
-                        <div class="flex items-baseline justify-between mb-2">
-                            <span class="text-sm text-gray-600">Balance</span>
-                            <span class="text-2xl font-bold ${account.balance >= 0 ? 'text-green-600' : 'text-red-600'}">${escapeHtml(account.balanceFormatted || account.balance?.toString() || '£0.00')}</span>
-                        </div>
-                        ${account.bankAccountNumber ? `
-                            <div class="text-xs text-gray-500 mt-2">
-                                <i class="fas fa-credit-card mr-1"></i>
-                                ${escapeHtml(account.bankAccountNumber)}
-                            </div>
-                        ` : ''}
-                        <div class="text-xs text-gray-500 mt-2">
-                            <i class="fas fa-coins mr-1"></i>
-                            ${escapeHtml(account.currencyCode || 'GBP')}
-                        </div>
-                        <div class="text-xs text-blue-600 mt-3 font-medium">
-                            <i class="fas fa-eye mr-1"></i>Click to view transactions
-                        </div>
-                    </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function showNotAuthenticatedState() {

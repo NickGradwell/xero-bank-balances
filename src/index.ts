@@ -37,6 +37,7 @@ import {
   listBankAccounts,
   insertBankStatementLines,
   getRecentStatementLines,
+  getStatementLinesByAccount,
 } from './database/transactionCache';
 import {
   sendAccountCollectionEmail,
@@ -416,7 +417,7 @@ app.get('/api/debug/tokens', (req, res): void => {
   });
 });
 
-// API endpoint to get bank accounts
+// API endpoint to get bank accounts (from Xero API - for OAuth flow)
 app.get('/api/xero/accounts', async (req, res): Promise<void> => {
   try {
     const tokenSet = req.session.xeroTokenSet;
@@ -446,6 +447,37 @@ app.get('/api/xero/accounts', async (req, res): Promise<void> => {
     logger.error('Failed to fetch bank accounts', { error });
     res.status(500).json({
       error: 'Failed to fetch bank accounts',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// API endpoint to get bank statement lines grouped by account (for main page)
+app.get('/api/xero/statements/by-account', async (_req, res): Promise<void> => {
+  try {
+    const statementsByAccount = await getStatementLinesByAccount(100);
+    const accounts = await listBankAccounts(200);
+    
+    // Combine account info with statement lines
+    const result = accounts.map((acc) => ({
+      accountId: acc.accountId,
+      accountName: acc.accountName,
+      lastCollectedAt: acc.lastCollectedAt,
+      statements: statementsByAccount[acc.accountId] || [],
+      statementCount: (statementsByAccount[acc.accountId] || []).length,
+    }));
+    
+    res.json({
+      success: true,
+      accounts: result,
+      totalAccounts: result.length,
+      totalStatements: Object.values(statementsByAccount).reduce((sum, lines) => sum + lines.length, 0),
+    });
+  } catch (error) {
+    logger.error('Failed to fetch statement lines by account', { error });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch statement lines by account',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }

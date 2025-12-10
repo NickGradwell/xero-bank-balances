@@ -343,6 +343,44 @@ export async function getRecentStatementLines(limit = 100): Promise<BankStatemen
   }));
 }
 
+export async function getStatementLinesByAccount(limitPerAccount = 100): Promise<Record<string, BankStatementLine[]>> {
+  const database = getPool();
+  const res = await database.query(
+    `SELECT id, account_id, account_name, statement_date, description, reference, payment_ref, spent, received, balance, source, status, raw_json, created_at
+     FROM bank_statement_lines
+     ORDER BY account_id, statement_date DESC, created_at DESC`
+  );
+  
+  // Group by account_id
+  const grouped: Record<string, BankStatementLine[]> = {};
+  for (const row of res.rows) {
+    const accountId = row.account_id;
+    if (!grouped[accountId]) {
+      grouped[accountId] = [];
+    }
+    if (grouped[accountId].length < limitPerAccount) {
+      grouped[accountId].push({
+        id: row.id,
+        accountId: row.account_id,
+        accountName: row.account_name,
+        statementDate: row.statement_date,
+        description: row.description,
+        reference: row.reference,
+        paymentRef: row.payment_ref,
+        spent: row.spent,
+        received: row.received,
+        balance: row.balance,
+        source: row.source,
+        status: row.status,
+        rawJson: row.raw_json,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
+      });
+    }
+  }
+  
+  return grouped;
+}
+
 export async function getCachedTransactions(
   accountId: string,
   month: number,
