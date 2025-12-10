@@ -216,9 +216,14 @@
         <div class="bg-white rounded-lg shadow-md p-6">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-semibold text-gray-800">Logs</h2>
-                <button id="clearLogsBtn" class="text-sm text-gray-600 hover:text-gray-800">
-                    <i class="fas fa-trash mr-1"></i>Clear Logs
-                </button>
+                <div class="flex gap-2">
+                    <button id="copyLogsBtn" class="text-sm text-blue-600 hover:text-blue-800">
+                        <i class="fas fa-copy mr-1"></i>Copy Logs
+                    </button>
+                    <button id="clearLogsBtn" class="text-sm text-gray-600 hover:text-gray-800">
+                        <i class="fas fa-trash mr-1"></i>Clear Logs
+                    </button>
+                </div>
             </div>
             <div id="logsContainer" class="bg-gray-900 text-green-400 font-mono text-sm p-4 rounded-lg max-h-96 overflow-y-auto">
                 <div class="text-gray-500">No logs yet...</div>
@@ -234,16 +239,30 @@
             return date.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         }
 
+        // Store all logs for persistence
+        let allLogs = [];
+
         function updateLogs(logs) {
             const container = document.getElementById('logsContainer');
             if (!container) return;
 
-            if (!logs || logs.length === 0) {
+            // Merge new logs with existing logs, avoiding duplicates
+            if (logs && logs.length > 0) {
+                const existingTimestamps = new Set(allLogs.map(l => l.timestamp?.toString() + l.step + l.message));
+                const newLogs = logs.filter(log => {
+                    const key = log.timestamp?.toString() + log.step + log.message;
+                    return !existingTimestamps.has(key);
+                });
+                allLogs = [...allLogs, ...newLogs];
+            }
+
+            // Always show all accumulated logs
+            if (allLogs.length === 0) {
                 container.innerHTML = '<div class="text-gray-500">No logs yet...</div>';
                 return;
             }
 
-            container.innerHTML = logs.map(log => {
+            container.innerHTML = allLogs.map(log => {
                 const timestamp = formatTimestamp(log.timestamp);
                 const errorClass = log.error ? 'text-red-400' : '';
                 return `
@@ -653,8 +672,10 @@
                     addLogMessage('ACCOUNTS', `✓ Successfully collected ${result.accounts?.length || 0} accounts`, null);
                     await refreshStoredAccounts();
                 } else {
-                    addLogMessage('ERROR', `Failed to collect accounts: ${result.error || result.message || 'Unknown error'}`, result.error);
-                    alert('Failed to collect account IDs');
+                    const errorMsg = result.error || result.message || 'Unknown error';
+                    addLogMessage('ERROR', `Failed to collect accounts: ${errorMsg}`, errorMsg);
+                    // Don't use alert - it can cause issues. Show error in logs instead.
+                    addLogMessage('ERROR', 'Collection failed. Check logs above for details.', null);
                 }
             } catch (error) {
                 if (accountCollectionLogInterval) {
@@ -809,23 +830,62 @@
             const container = document.getElementById('logsContainer');
             if (!container) return;
 
+            // Add to allLogs array
+            const logEntry = {
+                timestamp: new Date().toISOString(),
+                step,
+                message,
+                error: error || undefined,
+            };
+            allLogs.push(logEntry);
+
             // Remove "No logs yet" message if present
             if (container.querySelector('.text-gray-500')) {
                 container.innerHTML = '';
             }
 
-            const timestamp = formatTimestamp(new Date().toISOString());
+            const timestamp = formatTimestamp(logEntry.timestamp);
             const errorClass = error ? 'text-red-400' : '';
-            const logEntry = document.createElement('div');
-            logEntry.className = `mb-1 ${errorClass}`;
-            logEntry.innerHTML = `
+            const logDiv = document.createElement('div');
+            logDiv.className = `mb-1 ${errorClass}`;
+            logDiv.innerHTML = `
                 <span class="text-gray-500">[${timestamp}]</span>
                 <span class="text-yellow-400">[${step}]</span>
                 <span>${escapeHtml(message)}</span>
                 ${error ? `<span class="text-red-400"> - Error: ${escapeHtml(error)}</span>` : ''}
             `;
-            container.appendChild(logEntry);
+            container.appendChild(logDiv);
             container.scrollTop = container.scrollHeight;
+        }
+
+        function copyLogsToClipboard() {
+            if (allLogs.length === 0) {
+                alert('No logs to copy');
+                return;
+            }
+
+            const logText = allLogs.map(log => {
+                const timestamp = formatTimestamp(log.timestamp);
+                const errorPart = log.error ? ` - Error: ${log.error}` : '';
+                return `[${timestamp}] [${log.step}] ${log.message}${errorPart}`;
+            }).join('\n');
+
+            navigator.clipboard.writeText(logText).then(() => {
+                alert('Logs copied to clipboard!');
+            }).catch(err => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = logText;
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    alert('Logs copied to clipboard!');
+                } catch (e) {
+                    alert('Failed to copy logs. Please select and copy manually.');
+                }
+                document.body.removeChild(textarea);
+            });
         }
 
         function displayStatements(accounts) {
@@ -1025,6 +1085,11 @@
             const generateTotpBtn = document.getElementById('generateTotpSecretBtn');
             const testTotpBtn = document.getElementById('testTotpSecretBtn');
             const previewTotpBtn = document.getElementById('previewTotpCodeBtn');
+
+            const copyLogsBtn = document.getElementById('copyLogsBtn');
+            if (copyLogsBtn) {
+                copyLogsBtn.addEventListener('click', copyLogsToClipboard);
+            }
 
             if (clearLogsBtn) {
                 clearLogsBtn.addEventListener('click', clearLogs);

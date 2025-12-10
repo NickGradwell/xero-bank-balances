@@ -169,11 +169,18 @@ export class XeroLoginAgent {
       this.browser = await chromium.launch({
         headless: effectiveHeadless,
         args: launchArgs,
+        // For headed mode on macOS, ensure the window is brought to front
+        ...(effectiveHeadless ? {} : { 
+          channel: undefined, // Use default Chromium
+        }),
       });
 
       this.addLog('INIT', `Browser launched successfully in ${effectiveHeadless ? 'headless' : 'headed'} mode`);
       if (!effectiveHeadless) {
         this.addLog('INIT', 'Browser window should be visible. If not, check your system display settings.');
+        // Give the browser window time to appear
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        this.addLog('INIT', 'Browser window should now be visible. Check your screen for the Chromium window.');
       }
 
       this.context = await this.browser.newContext({
@@ -1068,10 +1075,27 @@ export class XeroLoginAgent {
             const href = await ancestorLink.getAttribute('href');
             this.addLog('ACCOUNTS', `  Found ancestor href: ${href || 'null'}`);
             if (href && href.includes('accountID=')) {
-              const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
-              if (match) {
+              // Try multiple regex patterns to extract accountID
+              // Pattern 1: accountID=value (standard)
+              let match = href.match(/accountID=([A-Za-z0-9\-_]+)/i);
+              // Pattern 2: accountID%3Dvalue (URL encoded)
+              if (!match) {
+                const decoded = decodeURIComponent(href);
+                match = decoded.match(/accountID=([A-Za-z0-9\-_]+)/i);
+              }
+              // Pattern 3: accountID%3Dvalue in original (direct match)
+              if (!match) {
+                match = href.match(/accountID%3D([A-Za-z0-9\-_]+)/i);
+              }
+              // Pattern 4: accountID=value& or accountID=value" or accountID=value'
+              if (!match) {
+                match = href.match(/accountID=([A-Za-z0-9\-_]+)[&"']?/i);
+              }
+              if (match && match[1]) {
                 accountId = match[1];
                 this.addLog('ACCOUNTS', `  ✓ Found accountID via ancestor: ${accountId}`);
+              } else {
+                this.addLog('ACCOUNTS', `  ✗ Could not extract accountID from href: ${href}`);
               }
             }
           } else {
@@ -1089,11 +1113,24 @@ export class XeroLoginAgent {
             if (await cardLink.count()) {
               const href = await cardLink.getAttribute('href');
               this.addLog('ACCOUNTS', `  Found card href: ${href || 'null'}`);
-              if (href && href.includes('accountID=')) {
-                const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
-                if (match) {
+              if (href && (href.includes('accountID=') || href.includes('accountID%3D'))) {
+                // Try multiple regex patterns to extract accountID
+                let match = href.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                if (!match) {
+                  const decoded = decodeURIComponent(href);
+                  match = decoded.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                }
+                if (!match) {
+                  match = href.match(/accountID%3D([A-Za-z0-9\-_]+)/i);
+                }
+                if (!match) {
+                  match = href.match(/accountID=([A-Za-z0-9\-_]+)[&"']?/i);
+                }
+                if (match && match[1]) {
                   accountId = match[1];
                   this.addLog('ACCOUNTS', `  ✓ Found accountID via card: ${accountId}`);
+                } else {
+                  this.addLog('ACCOUNTS', `  ✗ Could not extract accountID from card href: ${href}`);
                 }
               }
             } else {
@@ -1112,12 +1149,27 @@ export class XeroLoginAgent {
             if (await linkByText.count()) {
               const href = await linkByText.getAttribute('href');
               this.addLog('ACCOUNTS', `  Found text link href: ${href || 'null'}`);
-              if (href && href.includes('accountID=')) {
-                const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
-                if (match) {
+              if (href && (href.includes('accountID=') || href.includes('accountID%3D'))) {
+                // Try multiple regex patterns to extract accountID
+                let match = href.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                if (!match) {
+                  const decoded = decodeURIComponent(href);
+                  match = decoded.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                }
+                if (!match) {
+                  match = href.match(/accountID%3D([A-Za-z0-9\-_]+)/i);
+                }
+                if (!match) {
+                  match = href.match(/accountID=([A-Za-z0-9\-_]+)[&"']?/i);
+                }
+                if (match && match[1]) {
                   accountId = match[1];
                   this.addLog('ACCOUNTS', `  ✓ Found accountID via text search: ${accountId}`);
+                } else {
+                  this.addLog('ACCOUNTS', `  ✗ Could not extract accountID from text link href: ${href}`);
                 }
+              } else {
+                this.addLog('ACCOUNTS', `  No accountID in text link href`);
               }
             } else {
               this.addLog('ACCOUNTS', `  No text link found`);
