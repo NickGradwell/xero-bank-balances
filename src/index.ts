@@ -1228,15 +1228,13 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
           updatedAccounts,
           hasErrors: !!collectResult.errors,
         });
-        const emailSent = await sendAccountCollectionEmail(
+        await sendAccountCollectionEmail(
           collectResult.accounts.length,
           newAccounts,
           updatedAccounts,
           collectResult.errors
         );
-        if (!emailSent) {
-          logger.error('Account collection email sending returned false - check email service logs');
-        }
+        logger.info('Account collection email function completed - check email service logs for success/failure');
       } catch (emailError) {
         logger.error('Exception while sending account collection email', { error: emailError });
       }
@@ -1414,10 +1412,10 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
 });
 
 // Test email endpoint
-app.post('/api/test-email', async (req, res): Promise<void> => {
+app.post('/api/test-email', async (_req, res): Promise<void> => {
   try {
     const { sendErrorEmail } = await import('./services/email');
-    await sendErrorEmail('Test Agent', 'This is a test email from the Xero Bank Balances system', {
+    await sendErrorEmail('Agent 1', 'This is a test email from the Xero Bank Balances system', {
       test: true,
       timestamp: new Date().toISOString(),
     });
