@@ -774,6 +774,11 @@
             // Create modal content
             let modal = document.getElementById('accountTransactionsModal');
             if (!modal) {
+                // Remove any existing modal first to avoid duplicates
+                const existingModal = document.getElementById('accountTransactionsModal');
+                if (existingModal) {
+                    existingModal.remove();
+                }
                 // Create modal if it doesn't exist
                 const modalHtml = `
                     <div id="accountTransactionsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
