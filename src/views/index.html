@@ -841,18 +841,23 @@
             window.currentAccountData = { accountId, accountName: account.accountName, statements: sortedStatements };
 
             // Render transactions - ensure tbody exists
-            const tbody = document.getElementById('transactionsTableBody');
-            if (!tbody) {
-                console.error('transactionsTableBody not found after modal creation');
-                // Try again after a short delay
-                setTimeout(() => {
+            // Use a small delay to ensure DOM is fully ready
+            setTimeout(() => {
+                const tbody = document.getElementById('transactionsTableBody');
+                console.log('Looking for tbody, found:', tbody);
+                if (!tbody) {
+                    console.error('transactionsTableBody not found after modal creation');
+                    // Try once more
+                    setTimeout(() => {
+                        renderTransactionsTable(sortedStatements);
+                        if (modal) modal.classList.remove('hidden');
+                    }, 200);
+                } else {
+                    console.log('tbody found, rendering transactions');
                     renderTransactionsTable(sortedStatements);
                     if (modal) modal.classList.remove('hidden');
-                }, 100);
-            } else {
-                renderTransactionsTable(sortedStatements);
-                if (modal) modal.classList.remove('hidden');
-            }
+                }
+            }, 50);
         }
 
         let dateSortDirection = 'desc'; // 'desc' or 'asc'
@@ -870,33 +875,74 @@
 
             if (!statements || statements.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-3 text-center text-gray-500">No transactions found</td></tr>';
+                console.log('No statements to render');
                 return;
             }
 
-            tbody.innerHTML = statements.map((stmt, index) => {
+            // Clear first
+            tbody.innerHTML = '';
+            
+            // Parse and format dates more robustly
+            const rows = statements.map((stmt, index) => {
                 // Handle both possible property names
-                const date = stmt.statementDate || stmt.date || '';
+                const dateStr = stmt.statementDate || stmt.date || '';
                 const description = stmt.description || '';
                 const reference = stmt.reference || '';
                 const spent = stmt.spent || '';
                 const received = stmt.received || '';
                 const balance = stmt.balance || '';
                 
-                const formattedDate = date ? new Date(date).toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' }) : '';
+                // Try to parse date - handle various formats
+                let formattedDate = dateStr;
+                try {
+                    if (dateStr) {
+                        const dateObj = new Date(dateStr);
+                        if (!isNaN(dateObj.getTime())) {
+                            formattedDate = dateObj.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
+                        }
+                    }
+                } catch (e) {
+                    // If date parsing fails, use original string
+                    formattedDate = dateStr;
+                }
                 
                 return `
-                    <tr class="hover:bg-gray-50 transaction-row" data-date="${date}">
+                    <tr class="hover:bg-gray-50 transaction-row" data-date="${escapeHtml(dateStr)}">
                         <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${escapeHtml(formattedDate)}</td>
                         <td class="px-4 py-3 text-sm text-gray-900">${escapeHtml(description)}</td>
-                        <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(reference)}</td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(spent)}</td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(received)}</td>
-                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(balance)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(reference || '')}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(spent || '')}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(received || '')}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(balance || '')}</td>
                     </tr>
                 `;
-            }).join('');
+            });
             
-            console.log('Rendered', statements.length, 'rows');
+            // Insert all rows at once
+            const htmlContent = rows.join('');
+            tbody.innerHTML = htmlContent;
+            
+            console.log('Rendered', statements.length, 'rows. tbody.innerHTML length:', tbody.innerHTML.length);
+            console.log('tbody children count:', tbody.children.length);
+            console.log('First row HTML:', rows[0]?.substring(0, 200));
+            
+            // Verify the rows are actually in the DOM
+            const renderedRows = tbody.querySelectorAll('tr');
+            console.log('QuerySelector found', renderedRows.length, 'rows');
+            
+            if (renderedRows.length === 0 && statements.length > 0) {
+                console.error('Rows were not inserted! Trying appendChild method...');
+                // Try alternative method
+                rows.forEach(rowHtml => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = rowHtml;
+                    const rowElement = tempDiv.firstElementChild;
+                    if (rowElement) {
+                        tbody.appendChild(rowElement);
+                    }
+                });
+                console.log('After appendChild, tbody children:', tbody.children.length);
+            }
         }
 
         function sortTransactionsByDate() {
