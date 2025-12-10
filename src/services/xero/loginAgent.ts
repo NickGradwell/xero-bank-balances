@@ -1235,8 +1235,8 @@ export class XeroLoginAgent {
       const nameLabel = accountName || accountId;
       try {
         this.addLog('COLLECT_ID', `Navigating to statements for ${nameLabel} (${accountId})`);
-        // Use BankTransactions.aspx with pageSize=200 and descending date order
-        const url = `https://go.xero.com/Bank/BankTransactions.aspx?accountID=${accountId}&pageSize=200&orderby=TransactionDate&direction=DESC`;
+        // Use Statements.aspx (no query parameters - pagination is done via Next button)
+        const url = `https://go.xero.com/Bank/Statements.aspx?accountID=${accountId}`;
         this.addLog('COLLECT_ID', `Navigating to: ${url}`);
         try {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -1245,10 +1245,8 @@ export class XeroLoginAgent {
           this.addLog('COLLECT_ID', `Navigation error: ${e instanceof Error ? e.message : 'Unknown'}, continuing...`);
         }
 
-        // Poll for table every 5 seconds instead of waiting 60s
-        // Try multiple selectors as the table structure may differ on BankTransactions.aspx
+        // Poll for table every 5 seconds
         const tableSelectors = [
-          'table#bankTransactions', // BankTransactions.aspx uses this ID
           'table#statementDetails.standard[data-automationid="statementGrid"]',
           'table#statementDetails[data-automationid="statementGrid"]',
           'table[data-automationid="statementGrid"]',
@@ -1293,23 +1291,6 @@ export class XeroLoginAgent {
           if (tableFound) break;
           
           if (attempt < maxAttempts) {
-            // Debug: log what tables are on the page
-            try {
-              const allTables = await page.locator('table').all();
-              const tableInfo = [];
-              for (const table of allTables.slice(0, 5)) { // Check first 5 tables
-                const id = await table.getAttribute('id');
-                const dataId = await table.getAttribute('data-automationid');
-                const classes = await table.getAttribute('class');
-                const rowCount = await table.locator('tbody tr').count();
-                tableInfo.push(`id="${id || 'none'}" data-automationid="${dataId || 'none'}" class="${classes || 'none'}" rows=${rowCount}`);
-              }
-              if (tableInfo.length > 0) {
-                this.addLog('COLLECT_ID', `Found ${allTables.length} table(s) on page. First few: ${tableInfo.join('; ')}`);
-              }
-            } catch (e) {
-              // Ignore debug errors
-            }
             this.addLog('COLLECT_ID', `Waiting for table... (attempt ${attempt}/${maxAttempts})`);
             await page.waitForTimeout(5000);
           }
@@ -1323,77 +1304,152 @@ export class XeroLoginAgent {
         }
 
         const lines: BankStatementRow[] = [];
-        // Use the found selector or fall back to bankTransactions
-        const tableSelector = foundSelector || 'table#bankTransactions';
-        
-        // Try multiple row selectors
-        let rows = await page.locator(`${tableSelector} tbody tr[data-statementid]`).all();
-        if (rows.length === 0) {
-          this.addLog('COLLECT_ID', `No rows with data-statementid, trying all tbody rows...`);
-          rows = await page.locator(`${tableSelector} tbody tr`).all();
-          // Filter out header rows (rows with only th elements or very few cells)
-          const dataRows = [];
-          for (const row of rows) {
-            const thCount = await row.locator('th').count();
-            const tdCount = await row.locator('td').count();
-            if (thCount === 0 && tdCount >= 7) { // Data row should have at least 7 cells
-              dataRows.push(row);
+        const tableSelector = foundSelector || 'table#statementDetails';
+        let pageNumber = 1;
+        let hasMorePages = true;
+
+        // Pagination loop: collect from all pages
+        while (hasMorePages) {
+          this.addLog('COLLECT_ID', `Extracting data from page ${pageNumber}...`);
+          
+          // Wait a bit for page to stabilize
+          await page.waitForTimeout(1000);
+          
+          // Extract rows from current page
+          let rows = await page.locator(`${tableSelector} tbody tr[data-statementid]`).all();
+          if (rows.length === 0) {
+            this.addLog('COLLECT_ID', `No rows with data-statementid, trying all tbody rows...`);
+            rows = await page.locator(`${tableSelector} tbody tr`).all();
+            // Filter out header rows (rows with only th elements or very few cells)
+            const dataRows = [];
+            for (const row of rows) {
+              const thCount = await row.locator('th').count();
+              const tdCount = await row.locator('td').count();
+              if (thCount === 0 && tdCount >= 7) { // Data row should have at least 7 cells
+                dataRows.push(row);
+              }
             }
+            rows = dataRows;
+            this.addLog('COLLECT_ID', `Filtered to ${rows.length} data rows (excluding headers)`);
           }
-          rows = dataRows;
-          this.addLog('COLLECT_ID', `Filtered to ${rows.length} data rows (excluding headers)`);
-        }
-        this.addLog('COLLECT_ID', `Found ${rows.length} statement rows to process for ${nameLabel}`);
-        
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          try {
-            const cells = await row.locator('td, th').all();
-            if (cells.length < 10) {
-              this.addLog('COLLECT_ID', `  Row ${i + 1}: Skipped (only ${cells.length} cells, need at least 10)`);
+          
+          this.addLog('COLLECT_ID', `Found ${rows.length} statement rows on page ${pageNumber}`);
+          
+          // Extract data from current page rows
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            try {
+              const cells = await row.locator('td, th').all();
+              if (cells.length < 10) {
+                this.addLog('COLLECT_ID', `  Row ${i + 1}: Skipped (only ${cells.length} cells, need at least 10)`);
+                continue;
+              }
+
+              const texts: string[] = [];
+              for (const cell of cells) {
+                const t = await cell.textContent();
+                texts.push(t ? t.trim() : '');
+              }
+
+              const date = texts[1] || '';
+              const particulars = texts[4] || '';
+              const code = texts[5] || '';
+              const reference = texts[6] || '';
+              const spent = texts[8] || '';
+              const received = texts[9] || '';
+              const balance = texts[10] || '';
+
+              const description = particulars;
+              const paymentRef = code;
+
+              if (date) {
+                lines.push({
+                  date,
+                  description,
+                  reference,
+                  paymentRef,
+                  spent,
+                  received,
+                  balance,
+                });
+              } else {
+                this.addLog('COLLECT_ID', `  Row ${i + 1}: Skipped (no date)`);
+              }
+            } catch (e) {
+              this.addLog('COLLECT_ID', `  Row ${i + 1}: Error - ${e instanceof Error ? e.message : 'Unknown'}`);
               continue;
             }
+          }
 
-            const texts: string[] = [];
-            for (const cell of cells) {
-              const t = await cell.textContent();
-              texts.push(t ? t.trim() : '');
+          this.addLog('COLLECT_ID', `Extracted ${rows.length} rows from page ${pageNumber} (total so far: ${lines.length})`);
+
+          // Check for Next button and click it if available
+          const nextButtonSelectors = [
+            'a:has-text("Next >")',
+            'a:has-text("Next")',
+            'button:has-text("Next >")',
+            'button:has-text("Next")',
+            'a[aria-label*="Next" i]',
+            'button[aria-label*="Next" i]',
+            // Try to find by link text that contains "Next"
+            'a:has-text("Next")',
+          ];
+
+          let nextButtonFound = false;
+          for (const selector of nextButtonSelectors) {
+            try {
+              const nextButton = page.locator(selector).first();
+              if (await nextButton.isVisible({ timeout: 2000 })) {
+                // Check if it's enabled (not disabled)
+                const isDisabled = await nextButton.getAttribute('disabled') !== null;
+                const classes = await nextButton.getAttribute('class') || '';
+                const isDisabledByClass = classes.includes('disabled') || classes.includes('inactive');
+                
+                if (!isDisabled && !isDisabledByClass) {
+                  this.addLog('COLLECT_ID', `Clicking Next button (selector: ${selector})...`);
+                  await nextButton.click();
+                  await page.waitForTimeout(2000); // Wait for page to start loading
+                  
+                  // Wait for table to reload
+                  let reloaded = false;
+                  for (let waitAttempt = 1; waitAttempt <= 10; waitAttempt++) {
+                    await page.waitForTimeout(1000);
+                    // If we've waited enough, assume page loaded
+                    if (waitAttempt >= 3) {
+                      reloaded = true;
+                      break;
+                    }
+                  }
+                  
+                  if (reloaded) {
+                    pageNumber++;
+                    this.addLog('COLLECT_ID', `Navigated to page ${pageNumber}`);
+                    nextButtonFound = true;
+                    break;
+                  } else {
+                    this.addLog('COLLECT_ID', `Next button clicked but page may not have loaded yet`);
+                    nextButtonFound = true; // Assume it worked, continue
+                    pageNumber++;
+                    break;
+                  }
+                } else {
+                  this.addLog('COLLECT_ID', `Next button found but is disabled (end of pages)`);
+                }
+              }
+            } catch (e) {
+              // Try next selector
+              continue;
             }
+          }
 
-            const date = texts[1] || '';
-            const particulars = texts[4] || '';
-            const code = texts[5] || '';
-            const reference = texts[6] || '';
-            const spent = texts[8] || '';
-            const received = texts[9] || '';
-            const balance = texts[10] || '';
-            // const source = texts[11] || '';
-            // const status = texts[12] || '';
-
-            const description = particulars;
-            const paymentRef = code;
-
-            if (date) {
-              lines.push({
-                date,
-                description,
-                reference,
-                paymentRef,
-                spent,
-                received,
-                balance,
-              });
-            } else {
-              this.addLog('COLLECT_ID', `  Row ${i + 1}: Skipped (no date)`);
-            }
-          } catch (e) {
-            this.addLog('COLLECT_ID', `  Row ${i + 1}: Error - ${e instanceof Error ? e.message : 'Unknown'}`);
-            continue;
+          if (!nextButtonFound) {
+            this.addLog('COLLECT_ID', `No Next button found or all pages processed. Total pages: ${pageNumber}`);
+            hasMorePages = false;
           }
         }
 
         results.push({ accountId, accountName, lines });
-        this.addLog('COLLECT_ID', `✓ Successfully extracted ${lines.length} statement lines for ${nameLabel}`);
+        this.addLog('COLLECT_ID', `✓ Successfully extracted ${lines.length} statement lines from ${pageNumber} page(s) for ${nameLabel}`);
       } catch (e) {
         const msg = `Error collecting statements for ${nameLabel}: ${e instanceof Error ? e.message : 'Unknown error'}`;
         errors.push(msg);
