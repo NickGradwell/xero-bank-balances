@@ -52,9 +52,11 @@ export async function sendEmail(options: EmailOptions): Promise<boolean> {
     logger.info('Attempting to send email via Brevo', {
       sender: senderEmail,
       recipientCount: recipientList.length,
+      recipients: recipientList,
       subject: options.subject,
       apiKeyPresent: !!apiKey,
       apiKeyLength: apiKey?.length || 0,
+      apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : 'none',
     });
 
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
