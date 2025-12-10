@@ -818,7 +818,7 @@
                                                 <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Balance</th>
                                             </tr>
                                         </thead>
-                                        <tbody id="transactionsTableBody" class="bg-white divide-y divide-gray-200">
+                                        <tbody id="accountTransactionsTableBody" class="bg-white divide-y divide-gray-200">
                                         </tbody>
                                     </table>
                                 </div>
@@ -845,21 +845,21 @@
             // Store current account data for download
             window.currentAccountData = { accountId, accountName: account.accountName, statements: sortedStatements };
 
-            // Render transactions - ensure tbody exists
+            // Render transactions - use the specific tbody ID for account transactions
             // Use a small delay to ensure DOM is fully ready
             setTimeout(() => {
-                const tbody = document.getElementById('transactionsTableBody');
-                console.log('Looking for tbody, found:', tbody);
+                const tbody = document.getElementById('accountTransactionsTableBody');
+                console.log('Looking for accountTransactionsTableBody, found:', tbody);
                 if (!tbody) {
-                    console.error('transactionsTableBody not found after modal creation');
+                    console.error('accountTransactionsTableBody not found after modal creation');
                     // Try once more
                     setTimeout(() => {
-                        renderTransactionsTable(sortedStatements);
+                        renderAccountTransactionsTable(sortedStatements);
                         if (modal) modal.classList.remove('hidden');
                     }, 200);
                 } else {
                     console.log('tbody found, rendering transactions');
-                    renderTransactionsTable(sortedStatements);
+                    renderAccountTransactionsTable(sortedStatements, tbody);
                     if (modal) modal.classList.remove('hidden');
                 }
             }, 50);
@@ -867,14 +867,14 @@
 
         let dateSortDirection = 'desc'; // 'desc' or 'asc'
 
-        function renderTransactionsTable(statements) {
-            console.log('renderTransactionsTable called with', statements.length, 'statements');
+        function renderAccountTransactionsTable(statements, tbodyElement = null) {
+            console.log('renderAccountTransactionsTable called with', statements.length, 'statements');
             console.log('Sample statement:', statements[0]);
             
             currentTransactions = statements;
-            const tbody = document.getElementById('transactionsTableBody');
+            const tbody = tbodyElement || document.getElementById('accountTransactionsTableBody');
             if (!tbody) {
-                console.error('transactionsTableBody not found!');
+                console.error('accountTransactionsTableBody not found!');
                 return;
             }
 
@@ -957,14 +957,16 @@
                 const dateB = b.statementDate ? new Date(b.statementDate) : new Date(0);
                 return dateSortDirection === 'desc' ? dateB - dateA : dateA - dateB;
             });
-            renderTransactionsTable(sorted);
+            const tbody = document.getElementById('accountTransactionsTableBody');
+            renderAccountTransactionsTable(sorted, tbody);
         }
 
         function filterTransactionsByDate() {
             const filterInput = document.getElementById('dateFilterInput');
             if (!filterInput) return;
             const filterValue = filterInput.value.toLowerCase();
-            const rows = document.querySelectorAll('.transaction-row');
+            const tbody = document.getElementById('accountTransactionsTableBody');
+            const rows = tbody ? tbody.querySelectorAll('.transaction-row') : document.querySelectorAll('.transaction-row');
             
             rows.forEach(row => {
                 const date = row.getAttribute('data-date') || '';
