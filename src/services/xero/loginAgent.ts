@@ -757,55 +757,42 @@ export class XeroLoginAgent {
         this.addLog('COLLECT', 'Dashboard load timeout, proceeding anyway...');
       }
 
-      // Find all account cards on the left sidebar
-      this.addLog('COLLECT', 'Looking for account cards...');
-      const accountCardSelectors = [
-        '[data-testid*="account"]',
-        '.account-card',
-        '.account-item',
-        '[class*="account"]',
-        'a[href*="/account/"]',
-        'div[class*="AccountCard"]',
-        'li[class*="account"]',
-      ];
-
+      // Find all account cards via headings on the dashboard
+      this.addLog('COLLECT', 'Looking for account cards (h2.mf-bank-widget-heading-large)...');
       let accountCards: any[] = [];
-      for (const selector of accountCardSelectors) {
-        try {
-          const cards = await page.locator(selector).all();
-          if (cards.length > 0) {
-            this.addLog('COLLECT', `Found ${cards.length} account cards using selector: ${selector}`);
-            accountCards = cards;
-            break;
-          }
-        } catch (e) {
-          continue;
+      try {
+        const headingCards = await page.locator('h2.mf-bank-widget-heading-large').all();
+        if (headingCards.length > 0) {
+          this.addLog('COLLECT', `Found ${headingCards.length} account headings`);
+          accountCards = headingCards;
         }
+      } catch (e) {
+        // ignore
       }
 
-      // If no cards found with selectors, try to find by text pattern or structure
+      // Fallback to previous selector list if needed
       if (accountCards.length === 0) {
-        this.addLog('COLLECT', 'No cards found with standard selectors, trying alternative approach...');
-        // Try to find clickable elements that might be account names
-        try {
-          const allLinks = await page.locator('a, button, [role="button"]').all();
-          const potentialAccounts: any[] = [];
-          for (const link of allLinks) {
-            try {
-              const text = await link.textContent();
-              if (text && (text.includes('The Forest') || text.includes('Mapesbury'))) {
-                potentialAccounts.push(link);
-              }
-            } catch (e) {
-              continue;
+        const accountCardSelectors = [
+          '[data-testid*="account"]',
+          '.account-card',
+          '.account-item',
+          '[class*="account"]',
+          'a[href*="/account/"]',
+          'div[class*="AccountCard"]',
+          'li[class*="account"]',
+        ];
+
+        for (const selector of accountCardSelectors) {
+          try {
+            const cards = await page.locator(selector).all();
+            if (cards.length > 0) {
+              this.addLog('COLLECT', `Found ${cards.length} account cards using selector: ${selector}`);
+              accountCards = cards;
+              break;
             }
+          } catch (e) {
+            continue;
           }
-          if (potentialAccounts.length > 0) {
-            accountCards = potentialAccounts;
-            this.addLog('COLLECT', `Found ${accountCards.length} potential account links by text`);
-          }
-        } catch (e) {
-          this.addLog('COLLECT', 'Alternative approach also failed');
         }
       }
 
@@ -823,13 +810,11 @@ export class XeroLoginAgent {
         try {
           this.addLog('COLLECT', `Processing account ${i + 1} of ${cardsToProcess.length}...`);
 
-          // Extract account name from the card
+          // Extract account name from the heading
           try {
             const nameText = await card.textContent();
             if (nameText) {
-              // Clean up the name (remove extra whitespace, numbers in parentheses, etc.)
               accountName = nameText.trim().split('\n')[0].trim();
-              // Remove numbers in parentheses like "(15)"
               accountName = accountName.replace(/\s*\(\d+\)\s*$/, '').trim();
             }
           } catch (e) {
@@ -838,23 +823,17 @@ export class XeroLoginAgent {
 
           this.addLog('COLLECT', `Account name: ${accountName}`);
 
-          // Click on the account card/name
+          // Click on the account heading
           try {
+            await card.scrollIntoViewIfNeeded();
+            await page.waitForTimeout(200);
             await card.click({ timeout: 5000 });
             this.addLog('COLLECT', `Clicked on account: ${accountName}`);
           } catch (e) {
-            // Try scrolling into view first
-            try {
-              await card.scrollIntoViewIfNeeded();
-              await page.waitForTimeout(500);
-              await card.click({ timeout: 5000 });
-              this.addLog('COLLECT', `Clicked on account after scrolling: ${accountName}`);
-            } catch (e2) {
-              const errorMsg = `Failed to click on account ${accountName}`;
-              this.addLog('COLLECT', errorMsg, errorMsg);
-              errors.push(errorMsg);
-              continue;
-            }
+            const errorMsg = `Failed to click on account ${accountName}`;
+            this.addLog('COLLECT', errorMsg, errorMsg);
+            errors.push(errorMsg);
+            continue;
           }
 
           // Wait for account detail page to load
@@ -871,42 +850,19 @@ export class XeroLoginAgent {
 
           // Look for "Bank Statements" link
           this.addLog('COLLECT', `Looking for "Bank Statements" link...`);
-          const bankStatementsSelectors = [
-            'a:has-text("Bank Statements")',
-            'button:has-text("Bank Statements")',
-            '[role="link"]:has-text("Bank Statements")',
-            'a[href*="statement"]',
-            'a[href*="Statement"]',
-            'a:has-text("Statements")',
-            'a:has-text("statements")',
-          ];
-
-          let bankStatementsLink = null;
-          for (const selector of bankStatementsSelectors) {
-            try {
-              const link = page.locator(selector).first();
-              if (await link.isVisible({ timeout: 3000 })) {
-                bankStatementsLink = link;
-                this.addLog('COLLECT', `Found "Bank Statements" link using selector: ${selector}`);
-                break;
-              }
-            } catch (e) {
-              continue;
+          // Look for "Bank Statements" link with explicit href pattern
+          const bankStatementsLink = page.locator('a[href*="Bank/Statements.aspx"]', { hasText: /bank statements/i }).first();
+          try {
+            if (!(await bankStatementsLink.isVisible({ timeout: 5000 }))) {
+              throw new Error('Bank Statements link not visible');
             }
-          }
-
-          if (!bankStatementsLink) {
-            // Try getByRole or getByText
-            try {
-              bankStatementsLink = page.getByRole('link', { name: /bank statements/i }).first();
-              if (await bankStatementsLink.isVisible({ timeout: 3000 })) {
-                this.addLog('COLLECT', 'Found "Bank Statements" link using getByRole');
-              } else {
-                bankStatementsLink = null;
-              }
-            } catch (e) {
-              bankStatementsLink = null;
-            }
+            this.addLog('COLLECT', 'Found "Bank Statements" link via explicit href pattern');
+          } catch (e) {
+            const errorMsg = `Account "${accountName}" does not have a visible "Bank Statements" link`;
+            this.addLog('COLLECT', errorMsg, errorMsg);
+            errors.push(errorMsg);
+            await this.navigateToHome();
+            continue;
           }
 
           if (!bankStatementsLink) {
@@ -921,6 +877,8 @@ export class XeroLoginAgent {
           // Click on "Bank Statements" link
           this.addLog('COLLECT', `Clicking "Bank Statements" link...`);
           try {
+            await bankStatementsLink.scrollIntoViewIfNeeded();
+            await page.waitForTimeout(200);
             await bankStatementsLink.click({ timeout: 5000 });
             this.addLog('COLLECT', 'Clicked "Bank Statements" link');
           } catch (e) {
@@ -1068,37 +1026,22 @@ export class XeroLoginAgent {
     const statements: BankStatementRow[] = [];
 
     try {
-      // Find the table
-      const table = page.locator('table').first();
-      if (!(await table.isVisible({ timeout: 2000 }))) {
-        this.addLog('EXTRACT', 'Table not visible');
+      // Find the specific statements table
+      const table = page.locator('table#statementDetails.standard[data-automationid="statementGrid"]').first();
+      if (!(await table.isVisible({ timeout: 4000 }))) {
+        this.addLog('EXTRACT', 'Statement table not visible');
         return statements;
       }
 
-      // Get table headers to map columns
-      const headers: string[] = [];
-      try {
-        const headerCells = await table.locator('thead th, thead td, tr:first-child th, tr:first-child td').all();
-        for (const cell of headerCells) {
-          const text = await cell.textContent();
-          if (text) {
-            headers.push(text.trim().toLowerCase());
-          }
-        }
-        this.addLog('EXTRACT', `Found table headers: ${headers.join(', ')}`);
-      } catch (e) {
-        this.addLog('EXTRACT', 'Could not read table headers, using default mapping');
-      }
-
-      // Get all data rows
-      const rows = await table.locator('tbody tr, tr:not(:first-child)').all();
+      // Get all data rows (skip header)
+      const rows = await table.locator('tbody tr[data-statementid]').all();
       this.addLog('EXTRACT', `Found ${rows.length} data rows`);
 
       for (const row of rows) {
         try {
           const cells = await row.locator('td, th').all();
-          if (cells.length < 3) {
-            continue; // Skip rows with too few cells
+          if (cells.length < 10) {
+            continue; // Not enough cells to map expected columns
           }
 
           const cellTexts: string[] = [];
@@ -1107,51 +1050,24 @@ export class XeroLoginAgent {
             cellTexts.push(text ? text.trim() : '');
           }
 
-          // Map cells to our structure
-          // We'll try to match by header position or by common patterns
-          let date = '';
-          let description = '';
-          let reference = '';
-          let paymentRef = '';
-          let spent = '';
-          let received = '';
-          let balance = '';
+          // Table columns order (after the checkbox column):
+          // 0: checkbox, 1: Date, 2: Type, 3: Payee, 4: Particulars, 5: Code,
+          // 6: Reference, 7: Analysis Code, 8: Spent, 9: Received, 10: Balance, 11: Source, 12: Status
+          const date = cellTexts[1] || '';
+          // const type = cellTexts[2] || ''; // Not used in current output
+          const payee = cellTexts[3] || '';
+          const particulars = cellTexts[4] || '';
+          const code = cellTexts[5] || '';
+          const reference = cellTexts[6] || '';
+          const spent = cellTexts[8] || '';
+          const received = cellTexts[9] || '';
+          const balance = cellTexts[10] || '';
 
-          // Try to map by headers if available
-          if (headers.length > 0) {
-            for (let i = 0; i < Math.min(cellTexts.length, headers.length); i++) {
-              const header = headers[i];
-              const value = cellTexts[i];
+          // Map to our existing structure:
+          // description -> particulars (fallback to payee), paymentRef -> code
+          const description = particulars || payee || '';
+          const paymentRef = code;
 
-              if (header.includes('date')) {
-                date = value;
-              } else if (header.includes('description') || header.includes('details')) {
-                description = value;
-              } else if (header.includes('reference') && !header.includes('payment')) {
-                reference = value;
-              } else if (header.includes('payment') && header.includes('ref')) {
-                paymentRef = value;
-              } else if (header.includes('spent') || header.includes('debit') || header.includes('withdrawal')) {
-                spent = value;
-              } else if (header.includes('received') || header.includes('credit') || header.includes('deposit')) {
-                received = value;
-              } else if (header.includes('balance')) {
-                balance = value;
-              }
-            }
-          } else {
-            // Default mapping: assume standard order
-            // Date, Description, Reference, Payment Ref, Spent, Received, Balance
-            if (cellTexts.length >= 1) date = cellTexts[0];
-            if (cellTexts.length >= 2) description = cellTexts[1];
-            if (cellTexts.length >= 3) reference = cellTexts[2];
-            if (cellTexts.length >= 4) paymentRef = cellTexts[3];
-            if (cellTexts.length >= 5) spent = cellTexts[4];
-            if (cellTexts.length >= 6) received = cellTexts[5];
-            if (cellTexts.length >= 7) balance = cellTexts[6];
-          }
-
-          // Only add if we have at least a date
           if (date) {
             statements.push({
               date,
