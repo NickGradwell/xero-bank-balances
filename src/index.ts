@@ -1333,6 +1333,127 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
       return;
     }
 
+    // For "collect all" operations, return immediately and run in background to avoid timeouts
+    if (collectAll) {
+      // Send immediate response
+      res.json({
+        success: true,
+        message: 'Collection started in background. Check logs for progress. Email will be sent when complete.',
+        accountsToProcess: accounts.length,
+        collectAll: true,
+      });
+
+      // Run collection in background (don't await)
+      (async () => {
+        let agent: XeroLoginAgent | null = null;
+        try {
+          // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
+          // (macOS can run headed browsers without DISPLAY set)
+          const isServerEnvironment =
+            process.env.CI === 'true' ||
+            process.env.RAILWAY_ENVIRONMENT !== undefined ||
+            process.env.DYNO !== undefined ||
+            process.env.VERCEL !== undefined ||
+            (process.platform === 'linux' && !process.env.DISPLAY);
+
+          const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
+
+          const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
+          const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+          const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
+
+          agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
+          activeLoginAgent = agent; // Set as active so logs can be polled
+
+          const loginResult = await agent.login();
+          if (!loginResult.success) {
+            await agent.close();
+            activeLoginAgent = null;
+            const errorMsg = loginResult.error || 'Login failed';
+            await sendErrorEmail('Agent 2', errorMsg, { action: 'Bank statements collection', collectAll: true });
+            return;
+          }
+
+          const collectResult = await agent.collectStatementsByIds(
+            accounts.map((a) => ({ accountId: a.accountId, accountName: a.accountName })),
+            effectiveLimit
+          );
+
+          // store lines
+          for (const r of collectResult.results) {
+            const linesWithIds = r.lines.map((line) => ({
+              id: crypto.randomUUID(),
+              accountId: r.accountId,
+              accountName: r.accountName || '',
+              statementDate: line.date,
+              description: line.description,
+              reference: line.reference,
+              paymentRef: line.paymentRef,
+              spent: line.spent,
+              received: line.received,
+              balance: line.balance,
+              source: '',
+              status: '',
+              rawJson: JSON.stringify(line),
+            }));
+            await insertBankStatementLines(linesWithIds);
+          }
+
+          await agent.close();
+          activeLoginAgent = null;
+
+          // Send success email
+          try {
+            const totalLines = collectResult.results.reduce((sum, r) => sum + r.lines.length, 0);
+            const linesByAccount = collectResult.results.map((r) => ({
+              accountName: r.accountName || r.accountId,
+              lineCount: r.lines.length,
+            }));
+            await sendStatementCollectionEmail(
+              collectResult.results.length,
+              totalLines,
+              linesByAccount,
+              collectResult.errors
+            );
+          } catch (emailError) {
+            logger.error('Failed to send statement collection email', { error: emailError });
+          }
+
+          // Send error email if there were errors
+          if (collectResult.errors && collectResult.errors.length > 0) {
+            try {
+              await sendErrorEmail('Agent 2', 'Bank statements collection completed with errors', {
+                accountsProcessed: collectResult.results.length,
+                totalLines: collectResult.results.reduce((sum, r) => sum + r.lines.length, 0),
+                errors: collectResult.errors,
+              });
+            } catch (emailError) {
+              logger.error('Failed to send error email', { error: emailError });
+            }
+          }
+        } catch (error) {
+          logger.error('Background collect-by-id error', { error });
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          try {
+            await sendErrorEmail('Agent 2', errorMsg, { action: 'Bank statements collection', collectAll: true });
+          } catch (emailError) {
+            logger.error('Failed to send error email', { error: emailError });
+          }
+          if (agent) {
+            try {
+              await agent.close();
+            } catch (e) {
+              // Ignore close errors
+            }
+            activeLoginAgent = null;
+          }
+        }
+      })();
+
+      return;
+    }
+
+    // For non-collectAll operations, run synchronously (original behavior)
     // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
     // (macOS can run headed browsers without DISPLAY set)
     const isServerEnvironment =
@@ -1356,9 +1477,6 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
       await agent.close();
       activeLoginAgent = null;
       const errorMsg = loginResult.error || 'Login failed';
-      if (collectAll) {
-        await sendErrorEmail('Agent 2', errorMsg, { action: 'Bank statements collection', collectAll: true });
-      }
       res.status(500).json({ success: false, error: errorMsg });
       return;
     }
@@ -1390,38 +1508,6 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
 
     await agent.close();
     activeLoginAgent = null;
-
-    // Send email if collectAll is true
-    if (collectAll) {
-      try {
-        const totalLines = collectResult.results.reduce((sum, r) => sum + r.lines.length, 0);
-        const linesByAccount = collectResult.results.map((r) => ({
-          accountName: r.accountName || r.accountId,
-          lineCount: r.lines.length,
-        }));
-        await sendStatementCollectionEmail(
-          collectResult.results.length,
-          totalLines,
-          linesByAccount,
-          collectResult.errors
-        );
-      } catch (emailError) {
-        logger.error('Failed to send statement collection email', { error: emailError });
-      }
-    }
-
-    // Send error email if there were errors and collectAll is true
-    if (collectAll && collectResult.errors && collectResult.errors.length > 0) {
-      try {
-        await sendErrorEmail('Agent 2', 'Bank statements collection completed with errors', {
-          accountsProcessed: collectResult.results.length,
-          totalLines: collectResult.results.reduce((sum, r) => sum + r.lines.length, 0),
-          errors: collectResult.errors,
-        });
-      } catch (emailError) {
-        logger.error('Failed to send error email', { error: emailError });
-      }
-    }
 
     res.json(collectResult);
   } catch (error) {
