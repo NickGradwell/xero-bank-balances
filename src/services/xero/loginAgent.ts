@@ -746,15 +746,17 @@ export class XeroLoginAgent {
     const errors: string[] = [];
 
     try {
-      // Wait for dashboard to load (up to 30 seconds)
-      this.addLog('COLLECT', 'Waiting for dashboard to load...');
+      // Wait for dashboard to load (up to 60 seconds)
+      this.addLog('COLLECT', 'Waiting for dashboard to load (up to 60s)...');
       try {
-        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {
+        await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {
           this.addLog('COLLECT', 'networkidle timeout, waiting for page elements...');
         });
-        await page.waitForTimeout(2000); // Additional wait for dynamic content
+        // Wait for account headings to appear (up to 60s)
+        await page.waitForSelector('h2.mf-bank-widget-heading-large', { timeout: 60000 });
+        await page.waitForTimeout(3000); // Additional wait for dynamic content
       } catch (e) {
-        this.addLog('COLLECT', 'Dashboard load timeout, proceeding anyway...');
+        this.addLog('COLLECT', 'Dashboard load timeout, proceeding anyway after 60s...');
       }
 
       // Find all account cards via headings on the dashboard
@@ -823,13 +825,29 @@ export class XeroLoginAgent {
 
           this.addLog('COLLECT', `Account name: ${accountName}`);
 
-          // Click on the account heading
-          try {
-            await card.scrollIntoViewIfNeeded();
-            await page.waitForTimeout(200);
-            await card.click({ timeout: 5000 });
-            this.addLog('COLLECT', `Clicked on account: ${accountName}`);
-          } catch (e) {
+          // Click on the account heading (with multiple strategies)
+          const clickTargets = [
+            card,
+            card.locator('xpath=ancestor::a[1]'),
+            card.locator('xpath=ancestor::button[1]'),
+            card.locator('xpath=ancestor::*[self::div or self::li][1]'),
+          ];
+
+          let clicked = false;
+          for (const target of clickTargets) {
+            try {
+              await target.scrollIntoViewIfNeeded();
+              await page.waitForTimeout(200);
+              await target.click({ timeout: 5000, force: true });
+              this.addLog('COLLECT', `Clicked on account: ${accountName}`);
+              clicked = true;
+              break;
+            } catch (e) {
+              continue;
+            }
+          }
+
+          if (!clicked) {
             const errorMsg = `Failed to click on account ${accountName}`;
             this.addLog('COLLECT', errorMsg, errorMsg);
             errors.push(errorMsg);
@@ -850,52 +868,50 @@ export class XeroLoginAgent {
 
           // Look for "Bank Statements" link
           this.addLog('COLLECT', `Looking for "Bank Statements" link...`);
-          // Look for "Bank Statements" link with explicit href pattern
-          const bankStatementsLink = page.locator('a[href*="Bank/Statements.aspx"]', { hasText: /bank statements/i }).first();
+          // Wait for account page to settle (up to 30s) and look for the Bank statements tab
+          this.addLog('COLLECT', 'Looking for "Bank statements" tab...');
           try {
-            if (!(await bankStatementsLink.isVisible({ timeout: 5000 }))) {
-              throw new Error('Bank Statements link not visible');
-            }
-            this.addLog('COLLECT', 'Found "Bank Statements" link via explicit href pattern');
+            await page.waitForSelector('a:has-text("Bank statements"), button:has-text("Bank statements")', { timeout: 30000 });
           } catch (e) {
-            const errorMsg = `Account "${accountName}" does not have a visible "Bank Statements" link`;
-            this.addLog('COLLECT', errorMsg, errorMsg);
-            errors.push(errorMsg);
-            await this.navigateToHome();
-            continue;
+            this.addLog('COLLECT', 'Bank statements tab not immediately visible, continuing to search...');
           }
 
-          if (!bankStatementsLink) {
-            const errorMsg = `Account "${accountName}" does not have a "Bank Statements" link`;
-            this.addLog('COLLECT', errorMsg, errorMsg);
-            errors.push(errorMsg);
-            // Try to go back to dashboard
-            await this.navigateToHome();
-            continue;
-          }
-
-          // Click on "Bank Statements" link
-          this.addLog('COLLECT', `Clicking "Bank Statements" link...`);
+          const bankStatementsTab = page.locator('a:has-text("Bank statements"), button:has-text("Bank statements")').first();
           try {
-            await bankStatementsLink.scrollIntoViewIfNeeded();
+            await bankStatementsTab.scrollIntoViewIfNeeded();
             await page.waitForTimeout(200);
-            await bankStatementsLink.click({ timeout: 5000 });
-            this.addLog('COLLECT', 'Clicked "Bank Statements" link');
+            await bankStatementsTab.click({ timeout: 10000, force: true });
+            this.addLog('COLLECT', 'Clicked "Bank statements" tab');
           } catch (e) {
-            const errorMsg = `Failed to click "Bank Statements" link for account "${accountName}"`;
+            const errorMsg = `Failed to click "Bank statements" tab for account "${accountName}"`;
             this.addLog('COLLECT', errorMsg, errorMsg);
             errors.push(errorMsg);
             await this.navigateToHome();
             continue;
           }
 
-          // Wait for table to load
-          this.addLog('COLLECT', `Waiting for statements table to load...`);
-          await page.waitForTimeout(3000); // Wait for table to start loading
+          // Click on "Bank statements" tab (already located as bankStatementsTab)
+          this.addLog('COLLECT', `Clicking "Bank statements" tab...`);
           try {
-            await page.waitForSelector('table', { timeout: 15000 });
-            this.addLog('COLLECT', 'Table found, waiting for data...');
-            await page.waitForTimeout(2000); // Additional wait for data to populate
+            await bankStatementsTab.scrollIntoViewIfNeeded();
+            await page.waitForTimeout(200);
+            await bankStatementsTab.click({ timeout: 10000, force: true });
+            this.addLog('COLLECT', 'Clicked "Bank statements" tab');
+          } catch (e) {
+            const errorMsg = `Failed to click "Bank statements" tab for account "${accountName}"`;
+            this.addLog('COLLECT', errorMsg, errorMsg);
+            errors.push(errorMsg);
+            await this.navigateToHome();
+            continue;
+          }
+
+          // Wait for table to load (specific table) up to 30s
+          this.addLog('COLLECT', `Waiting for statements table to load...`);
+          await page.waitForTimeout(3000); // start loading
+          try {
+            await page.waitForSelector('table#statementDetails.standard[data-automationid="statementGrid"]', { timeout: 30000 });
+            this.addLog('COLLECT', 'Statement table found, waiting for data...');
+            await page.waitForTimeout(3000); // Additional wait for data
           } catch (e) {
             const errorMsg = `Table did not load for account "${accountName}"`;
             this.addLog('COLLECT', errorMsg, errorMsg);
