@@ -784,7 +784,12 @@
                 }
 
                 if (response.ok && result.success) {
-                    collectedStatements = result.accounts || [];
+                    // Convert results to the format expected by displayStatements
+                    collectedStatements = (result.results || []).map(r => ({
+                        accountName: r.accountName || r.accountId,
+                        statements: r.lines || [],
+                        collectedAt: new Date(),
+                    }));
                     displayStatements(collectedStatements);
                     if (progressText) progressText.textContent = `Collection complete! Collected ${collectedStatements.length} accounts.`;
                     addLogMessage('COLLECT', `Collection complete! Collected ${collectedStatements.length} accounts.`, null);

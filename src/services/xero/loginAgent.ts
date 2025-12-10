@@ -1235,9 +1235,17 @@ export class XeroLoginAgent {
       const nameLabel = accountName || accountId;
       try {
         this.addLog('COLLECT_ID', `Navigating to statements for ${nameLabel} (${accountId})`);
-        const url = `https://go.xero.com/Bank/Statements.aspx?accountID=${accountId}`;
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => null);
-        await page.waitForTimeout(3000);
+        // Use accountId (lowercase 'd') as that's what Xero uses in the URLs
+        const url = `https://go.xero.com/Bank/Statements.aspx?accountId=${accountId}`;
+        this.addLog('COLLECT_ID', `Navigating to: ${url}`);
+        try {
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+          this.addLog('COLLECT_ID', `Navigation complete, waiting for page to load...`);
+          await page.waitForTimeout(3000);
+        } catch (e) {
+          this.addLog('COLLECT_ID', `Navigation error: ${e instanceof Error ? e.message : 'Unknown'}, continuing...`);
+          await page.waitForTimeout(3000);
+        }
 
         try {
           await page.waitForSelector('table#statementDetails.standard[data-automationid="statementGrid"]', { timeout: 45000 });
@@ -1251,10 +1259,16 @@ export class XeroLoginAgent {
 
         const lines: BankStatementRow[] = [];
         const rows = await page.locator('table#statementDetails.standard[data-automationid="statementGrid"] tbody tr[data-statementid]').all();
-        for (const row of rows) {
+        this.addLog('COLLECT_ID', `Found ${rows.length} statement rows to process for ${nameLabel}`);
+        
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
           try {
             const cells = await row.locator('td, th').all();
-            if (cells.length < 10) continue;
+            if (cells.length < 10) {
+              this.addLog('COLLECT_ID', `  Row ${i + 1}: Skipped (only ${cells.length} cells, need at least 10)`);
+              continue;
+            }
 
             const texts: string[] = [];
             for (const cell of cells) {
@@ -1285,14 +1299,17 @@ export class XeroLoginAgent {
                 received,
                 balance,
               });
+            } else {
+              this.addLog('COLLECT_ID', `  Row ${i + 1}: Skipped (no date)`);
             }
           } catch (e) {
+            this.addLog('COLLECT_ID', `  Row ${i + 1}: Error - ${e instanceof Error ? e.message : 'Unknown'}`);
             continue;
           }
         }
 
         results.push({ accountId, accountName, lines });
-        this.addLog('COLLECT_ID', `Extracted ${lines.length} rows for ${nameLabel}`);
+        this.addLog('COLLECT_ID', `✓ Successfully extracted ${lines.length} statement lines for ${nameLabel}`);
       } catch (e) {
         const msg = `Error collecting statements for ${nameLabel}: ${e instanceof Error ? e.message : 'Unknown error'}`;
         errors.push(msg);
@@ -1300,6 +1317,9 @@ export class XeroLoginAgent {
       }
     }
 
+    const totalLines = results.reduce((sum, r) => sum + r.lines.length, 0);
+    this.addLog('COLLECT_ID', `Collection complete: ${results.length} accounts processed, ${totalLines} total statement lines extracted, ${errors.length} errors`);
+    
     return { success: results.length > 0, results, errors: errors.length ? errors : undefined };
   }
 

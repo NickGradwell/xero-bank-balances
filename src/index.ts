@@ -1237,10 +1237,12 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
     const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
 
     const agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
+    activeLoginAgent = agent; // Set as active so logs can be polled
 
     const loginResult = await agent.login();
     if (!loginResult.success) {
       await agent.close();
+      activeLoginAgent = null;
       res.status(500).json({ success: false, error: loginResult.error || 'Login failed' });
       return;
     }
@@ -1265,12 +1267,13 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
         balance: line.balance,
         source: '',
         status: '',
-        rawJson: line,
+        rawJson: JSON.stringify(line),
       }));
       await insertBankStatementLines(linesWithIds);
     }
 
     await agent.close();
+    activeLoginAgent = null;
 
     res.json(collectResult);
   } catch (error) {
