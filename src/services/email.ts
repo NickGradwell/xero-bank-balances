@@ -38,39 +38,73 @@ export async function sendEmail(options: EmailOptions): Promise<boolean> {
     // Use EMAIL_SENDER or default to a placeholder (must be verified in Brevo)
     const senderEmail = process.env.EMAIL_SENDER || 'noreply@xero-bank-balances.com';
     
+    const emailPayload = {
+      sender: {
+        name: 'Xero Bank Balances',
+        email: senderEmail,
+      },
+      to: recipientList.map((email) => ({ email })),
+      subject: options.subject,
+      htmlContent: options.htmlContent,
+      textContent: options.textContent || options.htmlContent.replace(/<[^>]*>/g, ''), // Strip HTML for text version
+    };
+
+    logger.info('Attempting to send email via Brevo', {
+      sender: senderEmail,
+      recipientCount: recipientList.length,
+      subject: options.subject,
+      apiKeyPresent: !!apiKey,
+      apiKeyLength: apiKey?.length || 0,
+    });
+
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
         'api-key': apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        sender: {
-          name: 'Xero Bank Balances',
-          email: senderEmail,
-        },
-        to: recipientList.map((email) => ({ email })),
-        subject: options.subject,
-        htmlContent: options.htmlContent,
-        textContent: options.textContent || options.htmlContent.replace(/<[^>]*>/g, ''), // Strip HTML for text version
-      }),
+      body: JSON.stringify(emailPayload),
     });
 
+    const responseText = await response.text();
+    
     if (!response.ok) {
-      const errorText = await response.text();
+      let errorData;
+      try {
+        errorData = JSON.parse(responseText);
+      } catch {
+        errorData = responseText;
+      }
+      
       logger.error('Brevo API error', {
         status: response.status,
         statusText: response.statusText,
-        error: errorText,
+        error: errorData,
+        sender: senderEmail,
+        recipients: recipientList,
       });
       return false;
     }
 
-    const result = await response.json();
-    logger.info('Email sent successfully', { messageId: result.messageId, recipients: recipientList });
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch {
+      result = { messageId: responseText };
+    }
+    
+    logger.info('Email sent successfully', {
+      messageId: result.messageId,
+      recipients: recipientList,
+      sender: senderEmail,
+    });
     return true;
   } catch (error) {
-    logger.error('Failed to send email', { error });
+    logger.error('Failed to send email - exception occurred', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      sender: process.env.EMAIL_SENDER || 'noreply@xero-bank-balances.com',
+    });
     return false;
   }
 }
@@ -120,7 +154,15 @@ export async function sendAccountCollectionEmail(
     </html>
   `;
 
-  await sendEmail({ subject, htmlContent });
+  const success = await sendEmail({ subject, htmlContent });
+  if (!success) {
+    logger.error('Failed to send account collection email', {
+      totalAccounts,
+      newAccounts,
+      updatedAccounts,
+      hasErrors: !!errors,
+    });
+  }
 }
 
 /**
@@ -189,7 +231,14 @@ export async function sendStatementCollectionEmail(
     </html>
   `;
 
-  await sendEmail({ subject, htmlContent });
+  const success = await sendEmail({ subject, htmlContent });
+  if (!success) {
+    logger.error('Failed to send statement collection email', {
+      accountsProcessed,
+      totalLines,
+      hasErrors: !!errors,
+    });
+  }
 }
 
 /**
@@ -226,6 +275,12 @@ export async function sendErrorEmail(
     </html>
   `;
 
-  await sendEmail({ subject, htmlContent });
+  const success = await sendEmail({ subject, htmlContent });
+  if (!success) {
+    logger.error('Failed to send error email', {
+      agent,
+      error,
+    });
+  }
 }
 
