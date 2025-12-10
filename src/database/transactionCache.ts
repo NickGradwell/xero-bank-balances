@@ -86,8 +86,13 @@ function getPool(): Pool {
       throw new Error('DATABASE_URL environment variable is not set. Please configure your PostgreSQL connection string.');
     }
 
+    // Allow overriding SSL validation for self-signed certs (e.g., Railway)
+    const sslRejectUnauthorized =
+      process.env.PGSSLMODE === 'disable' ? undefined : { rejectUnauthorized: false };
+
     pool = new Pool({
       connectionString: databaseUrl,
+      ssl: sslRejectUnauthorized,
       // Connection pool settings
       max: 10, // Maximum number of clients in the pool
       idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
