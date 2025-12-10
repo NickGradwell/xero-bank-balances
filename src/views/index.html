@@ -68,12 +68,17 @@
                 <h2 class="text-xl font-semibold text-gray-800">
                     Bank Statement Lines (<span id="accountsCount">0</span> accounts, <span id="statementsCount">0</span> transactions)
                 </h2>
-                <button onclick="loadBankAccounts()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
-                    <i class="fas fa-sync-alt mr-1"></i>Refresh
-                </button>
+                <div class="flex gap-2">
+                    <button onclick="downloadAllStatements()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-download mr-1"></i>Download All
+                    </button>
+                    <button onclick="loadBankAccounts()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-sync-alt mr-1"></i>Refresh
+                    </button>
+                </div>
             </div>
-            <div id="accountsGrid" class="space-y-6">
-                <!-- Bank account statement sections will be inserted here -->
+            <div id="accountsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Bank account cards will be inserted here -->
             </div>
         </div>
 
@@ -693,7 +698,10 @@
             }
         }
 
+        let allAccountsData = [];
+
         function displayBankAccounts(accounts) {
+            allAccountsData = accounts; // Store for download all
             const grid = document.getElementById('accountsGrid');
             const countElement = document.getElementById('accountsCount');
             const statementsCountElement = document.getElementById('statementsCount');
@@ -705,12 +713,12 @@
                 statementsCountElement.textContent = totalStatements;
             }
 
-            grid.innerHTML = accounts.map(account => {
+            grid.innerHTML = accounts.map((account, index) => {
                 const statements = account.statements || [];
                 const lastCollected = account.lastCollectedAt ? new Date(account.lastCollectedAt).toLocaleDateString() : 'Never';
                 
                 return `
-                    <div class="bg-white rounded-lg shadow-md p-6">
+                    <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow cursor-pointer" onclick="viewAccountTransactions('${escapeHtml(account.accountId)}', ${index})">
                         <div class="flex items-center justify-between mb-4">
                             <div class="flex items-center">
                                 <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mr-3">
@@ -718,46 +726,256 @@
                                 </div>
                                 <div>
                                     <h3 class="text-lg font-semibold text-gray-800">${escapeHtml(account.accountName || account.accountId)}</h3>
-                                    <p class="text-sm text-gray-500">${statements.length} transactions • Last collected: ${lastCollected}</p>
+                                    <p class="text-sm text-gray-500">${statements.length} transactions</p>
                                 </div>
                             </div>
                         </div>
-                        ${statements.length > 0 ? `
-                            <div class="overflow-x-auto">
-                                <table class="min-w-full divide-y divide-gray-200">
-                                    <thead class="bg-gray-50">
-                                        <tr>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
-                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Spent</th>
-                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Received</th>
-                                            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Balance</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="bg-white divide-y divide-gray-200">
-                                        ${statements.map(stmt => `
-                                            <tr class="hover:bg-gray-50">
-                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${escapeHtml(stmt.statementDate || '')}</td>
-                                                <td class="px-4 py-3 text-sm text-gray-900">${escapeHtml(stmt.description || '')}</td>
-                                                <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(stmt.reference || '')}</td>
-                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(stmt.spent || '')}</td>
-                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(stmt.received || '')}</td>
-                                                <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(stmt.balance || '')}</td>
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
+                        <div class="border-t border-gray-200 pt-4">
+                            <div class="flex items-center justify-between text-sm">
+                                <span class="text-gray-600">Last collected:</span>
+                                <span class="text-gray-800 font-medium">${lastCollected}</span>
                             </div>
-                        ` : `
-                            <div class="text-center py-8 text-gray-500">
-                                <i class="fas fa-inbox text-4xl mb-2"></i>
-                                <p>No statement lines collected yet for this account</p>
+                            <div class="mt-3 flex gap-2">
+                                <button onclick="event.stopPropagation(); viewAccountTransactions('${escapeHtml(account.accountId)}', ${index})" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                    <i class="fas fa-eye mr-1"></i>View
+                                </button>
+                                <button onclick="event.stopPropagation(); downloadAccountStatements('${escapeHtml(account.accountId)}', ${index})" class="flex-1 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                    <i class="fas fa-download mr-1"></i>Download
+                                </button>
                             </div>
-                        `}
+                        </div>
                     </div>
                 `;
             }).join('');
+        }
+
+        function viewAccountTransactions(accountId, accountIndex) {
+            const account = allAccountsData[accountIndex];
+            if (!account) return;
+
+            const statements = account.statements || [];
+            
+            // Sort by date descending (latest first)
+            const sortedStatements = [...statements].sort((a, b) => {
+                const dateA = a.statementDate ? new Date(a.statementDate) : new Date(0);
+                const dateB = b.statementDate ? new Date(b.statementDate) : new Date(0);
+                return dateB - dateA; // Descending
+            });
+
+            // Create modal content
+            const modal = document.getElementById('accountTransactionsModal');
+            if (!modal) {
+                // Create modal if it doesn't exist
+                const modalHtml = `
+                    <div id="accountTransactionsModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+                        <div class="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                            <div class="flex items-center justify-between p-6 border-b border-gray-200">
+                                <div>
+                                    <h2 id="modalAccountName" class="text-2xl font-semibold text-gray-800"></h2>
+                                    <p id="modalTransactionCount" class="text-sm text-gray-500 mt-1"></p>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button onclick="downloadCurrentAccountStatements()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                                        <i class="fas fa-download mr-1"></i>Download
+                                    </button>
+                                    <button onclick="closeAccountTransactionsModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                                        <i class="fas fa-times text-2xl"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-y-auto p-6">
+                                <div class="mb-4">
+                                    <input type="text" id="dateFilterInput" placeholder="Filter by date (YYYY-MM-DD)..." class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-xs" onkeyup="filterTransactionsByDate()">
+                                    <button onclick="sortTransactionsByDate()" class="ml-2 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg text-sm transition-colors">
+                                        <i class="fas fa-sort mr-1"></i>Sort Date
+                                    </button>
+                                </div>
+                                <div class="overflow-x-auto">
+                                    <table class="min-w-full divide-y divide-gray-200" id="transactionsTable">
+                                        <thead class="bg-gray-50 sticky top-0">
+                                            <tr>
+                                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTransactionsByDate()">
+                                                    Date <i class="fas fa-sort ml-1"></i>
+                                                </th>
+                                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
+                                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Spent</th>
+                                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Received</th>
+                                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Balance</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="transactionsTableBody" class="bg-white divide-y divide-gray-200">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+            }
+
+            const modal = document.getElementById('accountTransactionsModal');
+            document.getElementById('modalAccountName').textContent = account.accountName || account.accountId;
+            document.getElementById('modalTransactionCount').textContent = `${sortedStatements.length} transactions`;
+
+            // Store current account data for download
+            window.currentAccountData = { accountId, accountName: account.accountName, statements: sortedStatements };
+
+            // Render transactions
+            renderTransactionsTable(sortedStatements);
+            
+            modal.classList.remove('hidden');
+        }
+
+        let currentTransactions = [];
+        let dateSortDirection = 'desc'; // 'desc' or 'asc'
+
+        function renderTransactionsTable(statements) {
+            currentTransactions = statements;
+            const tbody = document.getElementById('transactionsTableBody');
+            if (!tbody) return;
+
+            tbody.innerHTML = statements.map(stmt => {
+                const date = stmt.statementDate ? new Date(stmt.statementDate).toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' }) : '';
+                return `
+                    <tr class="hover:bg-gray-50 transaction-row" data-date="${stmt.statementDate || ''}">
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${escapeHtml(date)}</td>
+                        <td class="px-4 py-3 text-sm text-gray-900">${escapeHtml(stmt.description || '')}</td>
+                        <td class="px-4 py-3 text-sm text-gray-500">${escapeHtml(stmt.reference || '')}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.spent ? 'text-red-600' : 'text-gray-400'}">${escapeHtml(stmt.spent || '')}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right ${stmt.received ? 'text-green-600' : 'text-gray-400'}">${escapeHtml(stmt.received || '')}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-medium text-gray-900">${escapeHtml(stmt.balance || '')}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function sortTransactionsByDate() {
+            dateSortDirection = dateSortDirection === 'desc' ? 'asc' : 'desc';
+            const sorted = [...currentTransactions].sort((a, b) => {
+                const dateA = a.statementDate ? new Date(a.statementDate) : new Date(0);
+                const dateB = b.statementDate ? new Date(b.statementDate) : new Date(0);
+                return dateSortDirection === 'desc' ? dateB - dateA : dateA - dateB;
+            });
+            renderTransactionsTable(sorted);
+        }
+
+        function filterTransactionsByDate() {
+            const filterInput = document.getElementById('dateFilterInput');
+            if (!filterInput) return;
+            const filterValue = filterInput.value.toLowerCase();
+            const rows = document.querySelectorAll('.transaction-row');
+            
+            rows.forEach(row => {
+                const date = row.getAttribute('data-date') || '';
+                if (date.toLowerCase().includes(filterValue) || filterValue === '') {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+
+        function closeAccountTransactionsModal() {
+            const modal = document.getElementById('accountTransactionsModal');
+            if (modal) modal.classList.add('hidden');
+            window.currentAccountData = null;
+        }
+
+        function downloadAccountStatements(accountId, accountIndex) {
+            const account = allAccountsData[accountIndex];
+            if (!account) return;
+            downloadStatementsAsCSV(account.accountName || accountId, account.statements || []);
+        }
+
+        function downloadCurrentAccountStatements() {
+            if (!window.currentAccountData) return;
+            downloadStatementsAsCSV(window.currentAccountData.accountName || window.currentAccountData.accountId, window.currentAccountData.statements);
+        }
+
+        function downloadAllStatements() {
+            if (!allAccountsData || allAccountsData.length === 0) {
+                alert('No statement data available to download');
+                return;
+            }
+
+            // Combine all statements with account names
+            const allStatements = [];
+            allAccountsData.forEach(account => {
+                (account.statements || []).forEach(stmt => {
+                    allStatements.push({
+                        Account: account.accountName || account.accountId,
+                        Date: stmt.statementDate || '',
+                        Description: stmt.description || '',
+                        Reference: stmt.reference || '',
+                        Spent: stmt.spent || '',
+                        Received: stmt.received || '',
+                        Balance: stmt.balance || ''
+                    });
+                });
+            });
+
+            downloadStatementsAsCSV('All_Accounts', allStatements, true);
+        }
+
+        function downloadStatementsAsCSV(accountName, statements, isAllAccounts = false) {
+            if (!statements || statements.length === 0) {
+                alert('No transactions to download');
+                return;
+            }
+
+            // Sort by date descending
+            const sorted = [...statements].sort((a, b) => {
+                const dateA = a.statementDate ? new Date(a.statementDate) : new Date(0);
+                const dateB = b.statementDate ? new Date(b.statementDate) : new Date(0);
+                return dateB - dateA;
+            });
+
+            // Create CSV
+            const headers = isAllAccounts 
+                ? ['Account', 'Date', 'Description', 'Reference', 'Spent', 'Received', 'Balance']
+                : ['Date', 'Description', 'Reference', 'Spent', 'Received', 'Balance'];
+            
+            const rows = sorted.map(stmt => {
+                const date = stmt.statementDate ? new Date(stmt.statementDate).toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' }) : '';
+                if (isAllAccounts) {
+                    return [
+                        accountName,
+                        date,
+                        `"${(stmt.Description || stmt.description || '').replace(/"/g, '""')}"`,
+                        `"${(stmt.Reference || stmt.reference || '').replace(/"/g, '""')}"`,
+                        stmt.Spent || stmt.spent || '',
+                        stmt.Received || stmt.received || '',
+                        stmt.Balance || stmt.balance || ''
+                    ];
+                } else {
+                    return [
+                        date,
+                        `"${(stmt.description || '').replace(/"/g, '""')}"`,
+                        `"${(stmt.reference || '').replace(/"/g, '""')}"`,
+                        stmt.spent || '',
+                        stmt.received || '',
+                        stmt.balance || ''
+                    ];
+                }
+            });
+
+            const csvContent = [
+                headers.join(','),
+                ...rows.map(row => row.join(','))
+            ].join('\n');
+
+            // Download
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', `${accountName.replace(/[^a-z0-9]/gi, '_')}_statements_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         function showNotAuthenticatedState() {
