@@ -1246,21 +1246,57 @@ export class XeroLoginAgent {
         }
 
         // Poll for table every 5 seconds instead of waiting 60s
+        // Try multiple selectors as the table structure may differ on BankTransactions.aspx
+        const tableSelectors = [
+          'table#statementDetails.standard[data-automationid="statementGrid"]',
+          'table#statementDetails[data-automationid="statementGrid"]',
+          'table[data-automationid="statementGrid"]',
+          'table#statementDetails',
+          'table.standard[data-automationid="statementGrid"]',
+        ];
+        
         let tableFound = false;
+        let foundSelector = '';
         const maxAttempts = 12; // 12 attempts * 5 seconds = 60 seconds max
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-          try {
-            const table = await page.locator('table#statementDetails.standard[data-automationid="statementGrid"]').first();
-            if (await table.count() > 0) {
-              tableFound = true;
-              this.addLog('COLLECT_ID', `Statement table found after ${attempt * 5} seconds, extracting rows...`);
-              break;
+          // Try each selector
+          for (const selector of tableSelectors) {
+            try {
+              const table = await page.locator(selector).first();
+              if (await table.count() > 0) {
+                // Verify it has rows
+                const rows = await table.locator('tbody tr').all();
+                if (rows.length > 0) {
+                  tableFound = true;
+                  foundSelector = selector;
+                  this.addLog('COLLECT_ID', `Statement table found after ${attempt * 5} seconds using selector: ${selector}`);
+                  break;
+                }
+              }
+            } catch (e) {
+              // Try next selector
             }
-          } catch (e) {
-            // Table not found yet
           }
           
+          if (tableFound) break;
+          
           if (attempt < maxAttempts) {
+            // Debug: log what tables are on the page
+            try {
+              const allTables = await page.locator('table').all();
+              const tableInfo = [];
+              for (const table of allTables.slice(0, 5)) { // Check first 5 tables
+                const id = await table.getAttribute('id');
+                const dataId = await table.getAttribute('data-automationid');
+                const classes = await table.getAttribute('class');
+                tableInfo.push(`id="${id || 'none'}" data-automationid="${dataId || 'none'}" class="${classes || 'none'}"`);
+              }
+              if (tableInfo.length > 0) {
+                this.addLog('COLLECT_ID', `Found ${allTables.length} table(s) on page. First few: ${tableInfo.join('; ')}`);
+              }
+            } catch (e) {
+              // Ignore debug errors
+            }
             this.addLog('COLLECT_ID', `Waiting for table... (attempt ${attempt}/${maxAttempts})`);
             await page.waitForTimeout(5000);
           }
@@ -1274,7 +1310,17 @@ export class XeroLoginAgent {
         }
 
         const lines: BankStatementRow[] = [];
-        const rows = await page.locator('table#statementDetails.standard[data-automationid="statementGrid"] tbody tr[data-statementid]').all();
+        // Use the found selector or fall back to the first one
+        const rowSelector = foundSelector 
+          ? `${foundSelector} tbody tr[data-statementid]`
+          : 'table#statementDetails.standard[data-automationid="statementGrid"] tbody tr[data-statementid]';
+        
+        // If data-statementid rows not found, try without that attribute
+        let rows = await page.locator(rowSelector).all();
+        if (rows.length === 0) {
+          this.addLog('COLLECT_ID', `No rows with data-statementid, trying all tbody rows...`);
+          rows = await page.locator(`${foundSelector || 'table#statementDetails'} tbody tr`).all();
+        }
         this.addLog('COLLECT_ID', `Found ${rows.length} statement rows to process for ${nameLabel}`);
         
         for (let i = 0; i < rows.length; i++) {
