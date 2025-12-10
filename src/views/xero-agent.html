@@ -598,7 +598,7 @@
         let storedAccounts = [];
 
         let accountCollectionInProgress = false;
-        let accountCollectionLogInterval: number | null = null;
+        let accountCollectionLogInterval = null;
 
         async function collectAccountIds() {
             if (accountCollectionInProgress) {
