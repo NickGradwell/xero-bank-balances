@@ -4,6 +4,29 @@ import { BankTransaction, XeroTokenSet } from '../types/xero';
 
 let pool: Pool | null = null;
 
+export type BankAccountRecord = {
+  accountId: string;
+  accountName: string;
+  lastCollectedAt: string | null;
+};
+
+export type BankStatementLine = {
+  id: string;
+  accountId: string;
+  accountName: string;
+  statementDate: string;
+  description: string;
+  reference: string;
+  paymentRef: string;
+  spent: string;
+  received: string;
+  balance: string;
+  source: string;
+  status: string;
+  rawJson?: any;
+  createdAt?: string;
+};
+
 interface CacheRecord {
   accountId: string;
   accountName: string;
@@ -173,11 +196,138 @@ export async function initTransactionCache(): Promise<void> {
       );
     `);
 
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS bank_accounts (
+        account_id TEXT PRIMARY KEY,
+        account_name TEXT NOT NULL,
+        last_collected_at TIMESTAMPTZ
+      );
+    `);
+
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS bank_statement_lines (
+        id UUID PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        account_name TEXT,
+        statement_date TEXT,
+        description TEXT,
+        reference TEXT,
+        payment_ref TEXT,
+        spent TEXT,
+        received TEXT,
+        balance TEXT,
+        source TEXT,
+        status TEXT,
+        raw_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        FOREIGN KEY (account_id) REFERENCES bank_accounts(account_id) ON DELETE CASCADE
+      );
+    `);
+
+    await database.query(`CREATE INDEX IF NOT EXISTS idx_bank_statement_account ON bank_statement_lines(account_id, created_at DESC);`);
+    await database.query(`CREATE INDEX IF NOT EXISTS idx_bank_statement_date ON bank_statement_lines(statement_date);`);
+
     logger.info('Initialized transaction cache database tables');
   } catch (error) {
     logger.error('Failed to initialize transaction cache database', { error });
     throw error;
   }
+}
+
+export async function upsertBankAccounts(accounts: BankAccountRecord[]): Promise<void> {
+  if (!accounts.length) return;
+  const database = getPool();
+  const values: any[] = [];
+  const chunks: string[] = [];
+  accounts.forEach((acc, i) => {
+    const idx = i * 3;
+    chunks.push(`($${idx + 1}, $${idx + 2}, $${idx + 3})`);
+    values.push(acc.accountId, acc.accountName, acc.lastCollectedAt ?? null);
+  });
+  const sql = `
+    INSERT INTO bank_accounts (account_id, account_name, last_collected_at)
+    VALUES ${chunks.join(', ')}
+    ON CONFLICT (account_id) DO UPDATE
+    SET account_name = EXCLUDED.account_name,
+        last_collected_at = EXCLUDED.last_collected_at
+  `;
+  await database.query(sql, values);
+}
+
+export async function listBankAccounts(limit = 100): Promise<BankAccountRecord[]> {
+  const database = getPool();
+  const res = await database.query(
+    `SELECT account_id, account_name, last_collected_at FROM bank_accounts ORDER BY account_name ASC LIMIT $1`,
+    [limit]
+  );
+  return res.rows.map((r) => ({
+    accountId: r.account_id,
+    accountName: r.account_name,
+    lastCollectedAt: r.last_collected_at ? new Date(r.last_collected_at).toISOString() : null,
+  }));
+}
+
+export async function insertBankStatementLines(lines: BankStatementLine[]): Promise<void> {
+  if (!lines.length) return;
+  const database = getPool();
+  const values: any[] = [];
+  const chunks: string[] = [];
+  lines.forEach((line, i) => {
+    const idx = i * 13;
+    chunks.push(
+      `($${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, $${idx + 8}, $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12}, $${idx + 13})`
+    );
+    values.push(
+      line.id,
+      line.accountId,
+      line.accountName || null,
+      line.statementDate || null,
+      line.description || null,
+      line.reference || null,
+      line.paymentRef || null,
+      line.spent || null,
+      line.received || null,
+      line.balance || null,
+      line.source || null,
+      line.status || null,
+      line.rawJson ? JSON.stringify(line.rawJson) : null
+    );
+  });
+  const sql = `
+    INSERT INTO bank_statement_lines (
+      id, account_id, account_name, statement_date, description, reference, payment_ref,
+      spent, received, balance, source, status, raw_json
+    ) VALUES ${chunks.join(', ')}
+    ON CONFLICT (id) DO NOTHING
+  `;
+  await database.query(sql, values);
+}
+
+export async function getRecentStatementLines(limit = 100): Promise<BankStatementLine[]> {
+  const database = getPool();
+  const res = await database.query(
+    `SELECT id, account_id, account_name, statement_date, description, reference, payment_ref, spent, received, balance, source, status, raw_json, created_at
+     FROM bank_statement_lines
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return res.rows.map((r) => ({
+    id: r.id,
+    accountId: r.account_id,
+    accountName: r.account_name,
+    statementDate: r.statement_date,
+    description: r.description,
+    reference: r.reference,
+    paymentRef: r.payment_ref,
+    spent: r.spent,
+    received: r.received,
+    balance: r.balance,
+    source: r.source,
+    status: r.status,
+    rawJson: r.raw_json,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+  }));
 }
 
 export async function getCachedTransactions(

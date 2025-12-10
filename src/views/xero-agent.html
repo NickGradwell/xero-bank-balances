@@ -111,7 +111,41 @@
             </div>
         </div>
 
-        <!-- Bank Statements Collection -->
+        <!-- Account IDs Collection (Agent 1) -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-800">
+                        <i class="fas fa-list mr-2 text-indigo-600"></i>Account IDs Collection
+                    </h2>
+                    <p class="text-gray-600 text-sm">Collect account IDs and names into the database.</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="headlessModeAccounts" class="h-4 w-4 text-blue-600 border-gray-300 rounded" checked>
+                    <label for="headlessModeAccounts" class="text-sm text-gray-700">Headless Mode</label>
+                </div>
+            </div>
+            <div class="space-y-4">
+                <div class="flex gap-4 items-center flex-wrap">
+                    <div class="flex items-center gap-2">
+                        <label for="accountLimit" class="text-sm font-medium text-gray-700">Number of accounts:</label>
+                        <input 
+                            type="number" 
+                            id="accountLimit" 
+                            value="3" 
+                            min="1" 
+                            max="200"
+                            class="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    <button id="collectAccountIdsBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-download mr-2"></i>Collect Account IDs
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bank Statements Collection (Agent 2) -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <div class="flex items-center justify-between mb-4">
                 <div>
@@ -561,6 +595,56 @@
         let collectedStatements = [];
         let collectionInProgress = false;
         let collectionLogInterval = null;
+        let storedAccounts = [];
+
+        async function collectAccountIds() {
+            const limitInput = document.getElementById('accountLimit');
+            const limit = limitInput ? parseInt(limitInput.value) || 3 : 3;
+            const headlessCheckbox = document.getElementById('headlessModeAccounts');
+            const headless = headlessCheckbox ? headlessCheckbox.checked : true;
+
+            addLogMessage('ACCOUNTS', `Collecting account IDs (limit: ${limit}, headless: ${headless})...`, null);
+            try {
+                const response = await fetch('/api/xero/accounts/collect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ limit, headless }),
+                });
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    addLogMessage('ACCOUNTS', `Collected ${result.accounts?.length || 0} accounts`, null);
+                    await refreshStoredAccounts();
+                } else {
+                    addLogMessage('ERROR', `Failed to collect accounts: ${result.error || result.message || 'Unknown error'}`, result.error);
+                    alert('Failed to collect account IDs');
+                }
+            } catch (error) {
+                addLogMessage('ERROR', `Collect account IDs error: ${error instanceof Error ? error.message : 'Unknown error'}`, error instanceof Error ? error.message : 'Unknown error');
+            }
+        }
+
+        async function refreshStoredAccounts() {
+            try {
+                const res = await fetch('/api/xero/accounts');
+                const data = await res.json();
+                if (data.success && data.accounts) {
+                    storedAccounts = data.accounts;
+                    const container = document.getElementById('accountsList');
+                    if (container) {
+                        container.innerHTML = storedAccounts.map(acc => `
+                            <div class="text-sm text-gray-800">
+                                <span class="font-medium">${escapeHtml(acc.accountName)}</span>
+                                <span class="text-gray-500">(${acc.accountId})</span>
+                                <span class="text-xs text-gray-500 ml-2">last: ${acc.lastCollectedAt || 'n/a'}</span>
+                            </div>
+                        `).join('') || '<div class="text-sm text-gray-500">No accounts stored.</div>';
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
 
         async function collectBankStatements() {
             if (collectionInProgress) {
@@ -608,7 +692,7 @@
                 // Add initial log message
                 addLogMessage('COLLECT', `Starting bank statements collection (headless: ${headless})...`, null);
 
-                const response = await fetch('/api/xero/bank-statements/collect', {
+                const response = await fetch('/api/xero/bank-statements/collect-by-id', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ limit, headless }),
@@ -899,23 +983,6 @@
             const testTotpBtn = document.getElementById('testTotpSecretBtn');
             const previewTotpBtn = document.getElementById('previewTotpCodeBtn');
 
-            if (runBtn) {
-                runBtn.addEventListener('click', () => {
-                    runAgent();
-                    startStatusPolling();
-                });
-            }
-
-            if (stopBtn) {
-                stopBtn.addEventListener('click', () => {
-                    stopAgent();
-                });
-            }
-
-            if (refreshBtn) {
-                refreshBtn.addEventListener('click', refreshStatus);
-            }
-
             if (clearLogsBtn) {
                 clearLogsBtn.addEventListener('click', clearLogs);
             }
@@ -936,9 +1003,14 @@
                 previewTotpBtn.addEventListener('click', previewTotpCode);
             }
 
+            const collectAccountIdsBtn = document.getElementById('collectAccountIdsBtn');
             const collectStatementsBtn = document.getElementById('collectStatementsBtn');
             const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
             const downloadAllBtn = document.getElementById('downloadAllBtn');
+
+            if (collectAccountIdsBtn) {
+                collectAccountIdsBtn.addEventListener('click', collectAccountIds);
+            }
 
             if (collectStatementsBtn) {
                 collectStatementsBtn.addEventListener('click', collectBankStatements);
@@ -955,8 +1027,8 @@
             // Load TOTP secret status on page load
             loadTotpSecret();
 
-            // Initial status check
-            refreshStatus();
+            // Initial data load
+            refreshStoredAccounts();
         });
     </script>
 </body>

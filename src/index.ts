@@ -32,7 +32,11 @@ import {
   getAdminSettings,
   saveAdminSettings,
   getStoredTokenSet,
-  getRecentCacheJobs
+  getRecentCacheJobs,
+  upsertBankAccounts,
+  listBankAccounts,
+  insertBankStatementLines,
+  getRecentStatementLines,
 } from './database/transactionCache';
 
 const app = express();
@@ -1125,6 +1129,154 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
       error: error instanceof Error ? error.message : 'Unknown error',
       accounts: [],
     });
+  }
+});
+
+// Agent 1: collect account IDs
+app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
+  try {
+    const { limit = 3, headless: requestedHeadless = true } = req.body as { limit?: number; headless?: boolean };
+
+    const isServerEnvironment =
+      !process.env.DISPLAY ||
+      process.env.CI === 'true' ||
+      process.env.RAILWAY_ENVIRONMENT !== undefined ||
+      process.env.DYNO !== undefined ||
+      process.env.VERCEL !== undefined ||
+      (process.platform === 'linux' && !process.env.DISPLAY);
+
+    const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
+
+    const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
+    const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+    const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
+
+    const agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
+
+    const loginResult = await agent.login();
+    if (!loginResult.success) {
+      await agent.close();
+      res.status(500).json({ success: false, error: loginResult.error || 'Login failed' });
+      return;
+    }
+
+    const collectResult = await agent.collectAccountIds(limit);
+    await agent.close();
+
+    if (collectResult.accounts.length) {
+      const nowIso = new Date().toISOString();
+      await upsertBankAccounts(
+        collectResult.accounts.map((a) => ({
+          accountId: a.accountId,
+          accountName: a.accountName,
+          lastCollectedAt: nowIso,
+        }))
+      );
+    }
+
+    res.json(collectResult);
+  } catch (error) {
+    logger.error('Accounts collect error', { error });
+    res.status(500).json({
+      success: false,
+      message: 'Accounts collect error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// List stored accounts
+app.get('/api/xero/accounts', async (_req, res): Promise<void> => {
+  try {
+    const accounts = await listBankAccounts(200);
+    res.json({ success: true, accounts });
+  } catch (error) {
+    logger.error('List accounts error', { error });
+    res.status(500).json({ success: false, error: 'Failed to list accounts' });
+  }
+});
+
+// Agent 2: collect statements by stored account IDs
+app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<void> => {
+  try {
+    const { limit = 3, headless: requestedHeadless = true } = req.body as { limit?: number; headless?: boolean };
+
+    const accounts = await listBankAccounts(limit);
+    if (!accounts.length) {
+      res.status(400).json({ success: false, error: 'No stored accounts. Run account ID collection first.' });
+      return;
+    }
+
+    const isServerEnvironment =
+      !process.env.DISPLAY ||
+      process.env.CI === 'true' ||
+      process.env.RAILWAY_ENVIRONMENT !== undefined ||
+      process.env.DYNO !== undefined ||
+      process.env.VERCEL !== undefined ||
+      (process.platform === 'linux' && !process.env.DISPLAY);
+
+    const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
+
+    const username = process.env.XERO_USERNAME || 'nickg@amberleyinnovations.com';
+    const password = process.env.XERO_PASSWORD || 'xeEspresso321!';
+    const totpSecret = (process.env.XERO_TOTP_SECRET || '').trim();
+
+    const agent = new XeroLoginAgent(username, password, effectiveHeadless, totpSecret || undefined);
+
+    const loginResult = await agent.login();
+    if (!loginResult.success) {
+      await agent.close();
+      res.status(500).json({ success: false, error: loginResult.error || 'Login failed' });
+      return;
+    }
+
+    const collectResult = await agent.collectStatementsByIds(
+      accounts.map((a) => ({ accountId: a.accountId, accountName: a.accountName })),
+      limit
+    );
+
+    // store lines
+    for (const r of collectResult.results) {
+      const linesWithIds = r.lines.map((line) => ({
+        id: crypto.randomUUID(),
+        accountId: r.accountId,
+        accountName: r.accountName || '',
+        statementDate: line.date,
+        description: line.description,
+        reference: line.reference,
+        paymentRef: line.paymentRef,
+        spent: line.spent,
+        received: line.received,
+        balance: line.balance,
+        source: '',
+        status: '',
+        rawJson: line,
+      }));
+      await insertBankStatementLines(linesWithIds);
+    }
+
+    await agent.close();
+
+    res.json(collectResult);
+  } catch (error) {
+    logger.error('Collect-by-id error', { error });
+    res.status(500).json({
+      success: false,
+      message: 'Collect-by-id error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// Recent statement lines
+app.get('/api/xero/statements/recent', async (req, res): Promise<void> => {
+  try {
+    const limit = parseInt((req.query.limit as string) || '100', 10);
+    const lines = await getRecentStatementLines(limit);
+    res.json({ success: true, lines });
+  } catch (error) {
+    logger.error('List recent statements error', { error });
+    res.status(500).json({ success: false, error: 'Failed to list statement lines' });
   }
 });
 

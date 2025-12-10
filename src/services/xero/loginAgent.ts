@@ -46,6 +46,17 @@ export interface CollectionResult {
   errors?: string[];
 }
 
+export interface AccountIdResult {
+  accountId: string;
+  accountName: string;
+}
+
+export interface StatementLineResult {
+  accountId: string;
+  accountName?: string;
+  lines: BankStatementRow[];
+}
+
 export class XeroLoginAgent {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -987,6 +998,190 @@ export class XeroLoginAgent {
         errors: [...(errors || []), errorMessage],
       };
     }
+  }
+
+  /**
+   * Agent 1: collect account IDs and names from the dashboard headings/cards.
+   */
+  async collectAccountIds(limit: number = 3): Promise<{ success: boolean; accounts: AccountIdResult[]; errors?: string[] }> {
+    if (!this.page || this.page.isClosed()) {
+      throw new Error('Page not initialized. Please login first.');
+    }
+
+    const page = this.page;
+    const accounts: AccountIdResult[] = [];
+    const errors: string[] = [];
+
+    this.addLog('ACCOUNTS', 'Looking for account headings...');
+    try {
+      await page.waitForSelector('h2.mf-bank-widget-heading-large', { timeout: 60000 });
+    } catch (e) {
+      this.addLog('ACCOUNTS', 'Timed out waiting for account headings');
+      return { success: false, accounts, errors: ['Timed out waiting for account headings'] };
+    }
+
+    const headings = await page.locator('h2.mf-bank-widget-heading-large').all();
+    const toProcess = headings.slice(0, limit);
+
+    for (const heading of toProcess) {
+      try {
+        const nameText = (await heading.textContent()) || '';
+        const accountName = nameText.trim().replace(/\s+\(\d+\)\s*$/, '');
+
+        // Try to find an href with accountID near this heading
+        let accountId: string | null = null;
+
+        // 1) closest ancestor link
+        const ancestorLink = heading.locator('xpath=ancestor::a[1]');
+        try {
+          if (await ancestorLink.count()) {
+            const href = await ancestorLink.getAttribute('href');
+            if (href && href.includes('accountID=')) {
+              const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
+              if (match) accountId = match[1];
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // 2) search within the card block
+        if (!accountId) {
+          try {
+            const cardLink = heading.locator('xpath=ancestor::*[self::div or self::li][1]').locator('a[href*="accountID="]').first();
+            if (await cardLink.count()) {
+              const href = await cardLink.getAttribute('href');
+              if (href && href.includes('accountID=')) {
+                const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
+                if (match) accountId = match[1];
+              }
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        // 3) global fallback search by text
+        if (!accountId) {
+          try {
+            const linkByText = page.locator(`a:has-text("${accountName}")`).filter({ has: page.locator('a[href*="accountID="]') }).first();
+            if (await linkByText.count()) {
+              const href = await linkByText.getAttribute('href');
+              if (href && href.includes('accountID=')) {
+                const match = href.match(/accountID=([A-Za-z0-9-]+)/i);
+                if (match) accountId = match[1];
+              }
+            }
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        if (accountId) {
+          accounts.push({ accountId, accountName });
+          this.addLog('ACCOUNTS', `Captured account: ${accountName} (${accountId})`);
+        } else {
+          const msg = `Could not find accountID for ${accountName}`;
+          errors.push(msg);
+          this.addLog('ACCOUNTS', msg, msg);
+        }
+      } catch (e) {
+        const msg = `Error processing heading: ${e instanceof Error ? e.message : 'Unknown error'}`;
+        errors.push(msg);
+        this.addLog('ACCOUNTS', msg, msg);
+      }
+    }
+
+    return { success: accounts.length > 0, accounts, errors: errors.length ? errors : undefined };
+  }
+
+  /**
+   * Agent 2: collect statements by direct account IDs.
+   */
+  async collectStatementsByIds(
+    accountInputs: { accountId: string; accountName?: string }[],
+    limit: number = 3
+  ): Promise<{ success: boolean; results: StatementLineResult[]; errors?: string[] }> {
+    if (!this.page || this.page.isClosed()) {
+      throw new Error('Page not initialized. Please login first.');
+    }
+
+    const page = this.page;
+    const results: StatementLineResult[] = [];
+    const errors: string[] = [];
+    const toProcess = accountInputs.slice(0, limit);
+
+    for (const acc of toProcess) {
+      const { accountId, accountName } = acc;
+      const nameLabel = accountName || accountId;
+      try {
+        this.addLog('COLLECT_ID', `Navigating to statements for ${nameLabel} (${accountId})`);
+        const url = `https://go.xero.com/Bank/Statements.aspx?accountID=${accountId}`;
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => null);
+        await page.waitForTimeout(3000);
+
+        try {
+          await page.waitForSelector('table#statementDetails.standard[data-automationid="statementGrid"]', { timeout: 45000 });
+          this.addLog('COLLECT_ID', 'Statement table found, extracting rows...');
+        } catch (e) {
+          const msg = `Table did not load for account ${nameLabel}`;
+          errors.push(msg);
+          this.addLog('COLLECT_ID', msg, msg);
+          continue;
+        }
+
+        const lines: BankStatementRow[] = [];
+        const rows = await page.locator('table#statementDetails.standard[data-automationid="statementGrid"] tbody tr[data-statementid]').all();
+        for (const row of rows) {
+          try {
+            const cells = await row.locator('td, th').all();
+            if (cells.length < 10) continue;
+
+            const texts: string[] = [];
+            for (const cell of cells) {
+              const t = await cell.textContent();
+              texts.push(t ? t.trim() : '');
+            }
+
+            const date = texts[1] || '';
+            const particulars = texts[4] || '';
+            const code = texts[5] || '';
+            const reference = texts[6] || '';
+            const spent = texts[8] || '';
+            const received = texts[9] || '';
+            const balance = texts[10] || '';
+            // const source = texts[11] || '';
+            // const status = texts[12] || '';
+
+            const description = particulars;
+            const paymentRef = code;
+
+            if (date) {
+              lines.push({
+                date,
+                description,
+                reference,
+                paymentRef,
+                spent,
+                received,
+                balance,
+              });
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        results.push({ accountId, accountName, lines });
+        this.addLog('COLLECT_ID', `Extracted ${lines.length} rows for ${nameLabel}`);
+      } catch (e) {
+        const msg = `Error collecting statements for ${nameLabel}: ${e instanceof Error ? e.message : 'Unknown error'}`;
+        errors.push(msg);
+        this.addLog('COLLECT_ID', msg, msg);
+      }
+    }
+
+    return { success: results.length > 0, results, errors: errors.length ? errors : undefined };
   }
 
   private async navigateToHome(): Promise<void> {
