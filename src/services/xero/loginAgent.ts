@@ -130,14 +130,25 @@ export class XeroLoginAgent {
       // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
       // (macOS can run headed browsers without DISPLAY set)
       // Check for common server environment indicators
+      const envChecks = {
+        CI: process.env.CI === 'true',
+        RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT !== undefined,
+        DYNO: process.env.DYNO !== undefined,
+        VERCEL: process.env.VERCEL !== undefined,
+        LINUX_NO_DISPLAY: process.platform === 'linux' && !process.env.DISPLAY,
+      };
+      
       const isServerEnvironment = 
-        process.env.CI === 'true' || // CI environment
-        process.env.RAILWAY_ENVIRONMENT !== undefined || // Railway
-        process.env.DYNO !== undefined || // Heroku
-        process.env.VERCEL !== undefined || // Vercel
-        (process.platform === 'linux' && !process.env.DISPLAY); // Linux without display
+        envChecks.CI ||
+        envChecks.RAILWAY_ENVIRONMENT ||
+        envChecks.DYNO ||
+        envChecks.VERCEL ||
+        envChecks.LINUX_NO_DISPLAY;
       
       const effectiveHeadless = isServerEnvironment ? true : this.headless;
+      
+      this.addLog('INIT', `Headless mode check: requested=${this.headless}, effective=${effectiveHeadless}, isServer=${isServerEnvironment}`);
+      this.addLog('INIT', `Environment checks: ${JSON.stringify(envChecks)}`);
       
       if (isServerEnvironment && !this.headless) {
         this.addLog('INIT', 'Server environment detected - forcing headless mode (headed mode not available)');
@@ -1074,22 +1085,23 @@ export class XeroLoginAgent {
           if (await ancestorLink.count()) {
             const href = await ancestorLink.getAttribute('href');
             this.addLog('ACCOUNTS', `  Found ancestor href: ${href || 'null'}`);
-            if (href && href.includes('accountID=')) {
-              // Try multiple regex patterns to extract accountID
-              // Pattern 1: accountID=value (standard)
-              let match = href.match(/accountID=([A-Za-z0-9\-_]+)/i);
-              // Pattern 2: accountID%3Dvalue (URL encoded)
+            // Check for accountID or accountId (case-insensitive)
+            if (href && /accountId?=/i.test(href)) {
+              // Try multiple regex patterns to extract accountID (case-insensitive)
+              // Pattern 1: accountID=value or accountId=value (standard, case-insensitive)
+              let match = href.match(/accountId?=([A-Za-z0-9\-_]+)/i);
+              // Pattern 2: accountID%3Dvalue or accountId%3Dvalue (URL encoded)
               if (!match) {
                 const decoded = decodeURIComponent(href);
-                match = decoded.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                match = decoded.match(/accountId?=([A-Za-z0-9\-_]+)/i);
               }
-              // Pattern 3: accountID%3Dvalue in original (direct match)
+              // Pattern 3: accountID%3Dvalue in original (direct match, case-insensitive)
               if (!match) {
-                match = href.match(/accountID%3D([A-Za-z0-9\-_]+)/i);
+                match = href.match(/accountId?%3D([A-Za-z0-9\-_]+)/i);
               }
               // Pattern 4: accountID=value& or accountID=value" or accountID=value'
               if (!match) {
-                match = href.match(/accountID=([A-Za-z0-9\-_]+)[&"']?/i);
+                match = href.match(/accountId?=([A-Za-z0-9\-_]+)[&"']?/i);
               }
               if (match && match[1]) {
                 accountId = match[1];
@@ -1097,6 +1109,8 @@ export class XeroLoginAgent {
               } else {
                 this.addLog('ACCOUNTS', `  ✗ Could not extract accountID from href: ${href}`);
               }
+            } else {
+              this.addLog('ACCOUNTS', `  Href does not contain accountID/accountId parameter`);
             }
           } else {
             this.addLog('ACCOUNTS', `  No ancestor link found`);
@@ -1113,18 +1127,19 @@ export class XeroLoginAgent {
             if (await cardLink.count()) {
               const href = await cardLink.getAttribute('href');
               this.addLog('ACCOUNTS', `  Found card href: ${href || 'null'}`);
-              if (href && (href.includes('accountID=') || href.includes('accountID%3D'))) {
-                // Try multiple regex patterns to extract accountID
-                let match = href.match(/accountID=([A-Za-z0-9\-_]+)/i);
+              // Check for accountID or accountId (case-insensitive)
+              if (href && /accountId?=/i.test(href)) {
+                // Try multiple regex patterns to extract accountID (case-insensitive)
+                let match = href.match(/accountId?=([A-Za-z0-9\-_]+)/i);
                 if (!match) {
                   const decoded = decodeURIComponent(href);
-                  match = decoded.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                  match = decoded.match(/accountId?=([A-Za-z0-9\-_]+)/i);
                 }
                 if (!match) {
-                  match = href.match(/accountID%3D([A-Za-z0-9\-_]+)/i);
+                  match = href.match(/accountId?%3D([A-Za-z0-9\-_]+)/i);
                 }
                 if (!match) {
-                  match = href.match(/accountID=([A-Za-z0-9\-_]+)[&"']?/i);
+                  match = href.match(/accountId?=([A-Za-z0-9\-_]+)[&"']?/i);
                 }
                 if (match && match[1]) {
                   accountId = match[1];
@@ -1149,18 +1164,19 @@ export class XeroLoginAgent {
             if (await linkByText.count()) {
               const href = await linkByText.getAttribute('href');
               this.addLog('ACCOUNTS', `  Found text link href: ${href || 'null'}`);
-              if (href && (href.includes('accountID=') || href.includes('accountID%3D'))) {
-                // Try multiple regex patterns to extract accountID
-                let match = href.match(/accountID=([A-Za-z0-9\-_]+)/i);
+              // Check for accountID or accountId (case-insensitive)
+              if (href && /accountId?=/i.test(href)) {
+                // Try multiple regex patterns to extract accountID (case-insensitive)
+                let match = href.match(/accountId?=([A-Za-z0-9\-_]+)/i);
                 if (!match) {
                   const decoded = decodeURIComponent(href);
-                  match = decoded.match(/accountID=([A-Za-z0-9\-_]+)/i);
+                  match = decoded.match(/accountId?=([A-Za-z0-9\-_]+)/i);
                 }
                 if (!match) {
-                  match = href.match(/accountID%3D([A-Za-z0-9\-_]+)/i);
+                  match = href.match(/accountId?%3D([A-Za-z0-9\-_]+)/i);
                 }
                 if (!match) {
-                  match = href.match(/accountID=([A-Za-z0-9\-_]+)[&"']?/i);
+                  match = href.match(/accountId?=([A-Za-z0-9\-_]+)[&"']?/i);
                 }
                 if (match && match[1]) {
                   accountId = match[1];
@@ -1169,7 +1185,7 @@ export class XeroLoginAgent {
                   this.addLog('ACCOUNTS', `  ✗ Could not extract accountID from text link href: ${href}`);
                 }
               } else {
-                this.addLog('ACCOUNTS', `  No accountID in text link href`);
+                this.addLog('ACCOUNTS', `  No accountID/accountId in text link href`);
               }
             } else {
               this.addLog('ACCOUNTS', `  No text link found`);
