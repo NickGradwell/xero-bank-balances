@@ -968,6 +968,80 @@
 
                 const result = await response.json();
 
+                // Check if this is a background job (collectAll response)
+                if (result.collectAll && result.message && result.message.includes('background')) {
+                    // This is a background job - continue polling for logs
+                    addLogMessage('COLLECT', `Collection started in background. Processing ${result.accountsToProcess || 0} accounts...`, null);
+                    addLogMessage('COLLECT', 'Monitoring progress via logs. Collection will continue even if you close this page.', null);
+                    if (progressText) progressText.textContent = `Collection running in background (${result.accountsToProcess || 0} accounts)...`;
+                    
+                    // Continue polling for a longer time (up to 2 hours for large collections)
+                    // Check every 5 seconds instead of 1 second to reduce load
+                    if (collectionLogInterval) {
+                        clearInterval(collectionLogInterval);
+                    }
+                    let pollCount = 0;
+                    const maxPolls = 1440; // 2 hours at 5 second intervals
+                    collectionLogInterval = setInterval(async () => {
+                        pollCount++;
+                        try {
+                            const statusResponse = await fetch('/api/xero/login-agent/status');
+                            if (statusResponse.ok) {
+                                const statusData = await statusResponse.json();
+                                if (statusData.logs && statusData.logs.length > 0) {
+                                    updateLogs(statusData.logs);
+                                }
+                                // Check if agent is still running
+                                if (!statusData.running && pollCount > 10) {
+                                    // Agent finished, stop polling
+                                    clearInterval(collectionLogInterval);
+                                    collectionLogInterval = null;
+                                    if (progressText) progressText.textContent = 'Collection complete! Check your email for summary.';
+                                    addLogMessage('COLLECT', 'Collection complete! Check your email for summary.', null);
+                                    collectionInProgress = false;
+                                    if (collectBtn) collectBtn.disabled = false;
+                                    if (stopBtn) {
+                                        stopBtn.classList.add('hidden');
+                                        stopBtn.disabled = true;
+                                    }
+                                }
+                            } else {
+                                // Agent might have finished
+                                if (pollCount > 10) {
+                                    clearInterval(collectionLogInterval);
+                                    collectionLogInterval = null;
+                                    if (progressText) progressText.textContent = 'Collection may have completed. Check your email for summary.';
+                                    addLogMessage('COLLECT', 'Collection may have completed. Check your email for summary.', null);
+                                    collectionInProgress = false;
+                                    if (collectBtn) collectBtn.disabled = false;
+                                    if (stopBtn) {
+                                        stopBtn.classList.add('hidden');
+                                        stopBtn.disabled = true;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // Continue polling on errors
+                            if (pollCount > maxPolls) {
+                                clearInterval(collectionLogInterval);
+                                collectionLogInterval = null;
+                                if (progressText) progressText.textContent = 'Polling timeout. Collection may still be running. Check email for completion.';
+                                addLogMessage('COLLECT', 'Polling timeout. Collection may still be running. Check email for completion.', null);
+                                collectionInProgress = false;
+                                if (collectBtn) collectBtn.disabled = false;
+                                if (stopBtn) {
+                                    stopBtn.classList.add('hidden');
+                                    stopBtn.disabled = true;
+                                }
+                            }
+                        }
+                    }, 5000); // Poll every 5 seconds
+                    
+                    // Don't stop here - let it continue polling
+                    return;
+                }
+
+                // For non-background jobs, handle normally
                 // Stop polling
                 if (collectionLogInterval) {
                     clearInterval(collectionLogInterval);
