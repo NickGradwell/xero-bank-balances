@@ -38,6 +38,11 @@ import {
   insertBankStatementLines,
   getRecentStatementLines,
 } from './database/transactionCache';
+import {
+  sendAccountCollectionEmail,
+  sendStatementCollectionEmail,
+  sendErrorEmail,
+} from './services/email';
 
 const app = express();
 
@@ -1136,7 +1141,11 @@ app.post('/api/xero/bank-statements/collect', async (req, res): Promise<void> =>
 // Agent 1: collect account IDs
 app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
   try {
-    const { limit = 3, headless: requestedHeadless = true } = req.body as { limit?: number; headless?: boolean };
+    const { limit = 3, headless: requestedHeadless = true, collectAll = false } = req.body as {
+      limit?: number;
+      headless?: boolean;
+      collectAll?: boolean;
+    };
 
     // Only force headless on actual server/cloud environments, not just when DISPLAY is missing
     // (macOS can run headed browsers without DISPLAY set)
@@ -1148,9 +1157,11 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
       (process.platform === 'linux' && !process.env.DISPLAY);
 
     const effectiveHeadless = isServerEnvironment ? true : requestedHeadless;
+    const effectiveLimit = collectAll ? 10000 : limit; // Use large number for "collect all"
 
     logger.info('Starting account ID collection', {
-      limit,
+      limit: effectiveLimit,
+      collectAll,
       requestedHeadless,
       effectiveHeadless,
       isServerEnvironment,
@@ -1169,13 +1180,24 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
     if (!loginResult.success) {
       await agent.close();
       activeLoginAgent = null;
-      res.status(500).json({ success: false, error: loginResult.error || 'Login failed' });
+      const errorMsg = loginResult.error || 'Login failed';
+      if (collectAll) {
+        await sendErrorEmail('Agent 1', errorMsg, { action: 'Account ID collection', collectAll: true });
+      }
+      res.status(500).json({ success: false, error: errorMsg });
       return;
     }
 
-    const collectResult = await agent.collectAccountIds(limit);
+    // Get existing accounts before collection to determine new vs updated
+    const existingAccounts = await listBankAccounts(10000);
+    const existingAccountIds = new Set(existingAccounts.map((a) => a.accountId));
+
+    const collectResult = await agent.collectAccountIds(effectiveLimit);
     await agent.close();
     activeLoginAgent = null;
+
+    let newAccounts = 0;
+    let updatedAccounts = 0;
 
     if (collectResult.accounts.length) {
       const nowIso = new Date().toISOString();
@@ -1186,15 +1208,61 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
           lastCollectedAt: nowIso,
         }))
       );
+
+      // Count new vs updated
+      for (const acc of collectResult.accounts) {
+        if (existingAccountIds.has(acc.accountId)) {
+          updatedAccounts++;
+        } else {
+          newAccounts++;
+        }
+      }
+    }
+
+    // Send email if collectAll is true
+    if (collectAll) {
+      try {
+        await sendAccountCollectionEmail(
+          collectResult.accounts.length,
+          newAccounts,
+          updatedAccounts,
+          collectResult.errors
+        );
+      } catch (emailError) {
+        logger.error('Failed to send account collection email', { error: emailError });
+      }
+    }
+
+    // Send error email if there were errors and collectAll is true
+    if (collectAll && collectResult.errors && collectResult.errors.length > 0) {
+      try {
+        await sendErrorEmail('Agent 1', 'Account collection completed with errors', {
+          totalAccounts: collectResult.accounts.length,
+          newAccounts,
+          updatedAccounts,
+          errors: collectResult.errors,
+        });
+      } catch (emailError) {
+        logger.error('Failed to send error email', { error: emailError });
+      }
     }
 
     res.json(collectResult);
   } catch (error) {
     logger.error('Accounts collect error', { error });
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const { collectAll = false } = req.body as { collectAll?: boolean };
+    if (collectAll) {
+      try {
+        await sendErrorEmail('Agent 1', errorMsg, { action: 'Account ID collection', collectAll: true });
+      } catch (emailError) {
+        logger.error('Failed to send error email', { error: emailError });
+      }
+    }
     res.status(500).json({
       success: false,
       message: 'Accounts collect error',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorMsg,
     });
   }
 });
@@ -1213,9 +1281,14 @@ app.get('/api/xero/accounts', async (_req, res): Promise<void> => {
 // Agent 2: collect statements by stored account IDs
 app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<void> => {
   try {
-    const { limit = 3, headless: requestedHeadless = true } = req.body as { limit?: number; headless?: boolean };
+    const { limit = 3, headless: requestedHeadless = true, collectAll = false } = req.body as {
+      limit?: number;
+      headless?: boolean;
+      collectAll?: boolean;
+    };
 
-    const accounts = await listBankAccounts(limit);
+    const effectiveLimit = collectAll ? 10000 : limit; // Use large number for "collect all"
+    const accounts = await listBankAccounts(effectiveLimit);
     if (!accounts.length) {
       res.status(400).json({ success: false, error: 'No stored accounts. Run account ID collection first.' });
       return;
@@ -1243,13 +1316,17 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
     if (!loginResult.success) {
       await agent.close();
       activeLoginAgent = null;
-      res.status(500).json({ success: false, error: loginResult.error || 'Login failed' });
+      const errorMsg = loginResult.error || 'Login failed';
+      if (collectAll) {
+        await sendErrorEmail('Agent 2', errorMsg, { action: 'Bank statements collection', collectAll: true });
+      }
+      res.status(500).json({ success: false, error: errorMsg });
       return;
     }
 
     const collectResult = await agent.collectStatementsByIds(
       accounts.map((a) => ({ accountId: a.accountId, accountName: a.accountName })),
-      limit
+      effectiveLimit
     );
 
     // store lines
@@ -1275,13 +1352,54 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
     await agent.close();
     activeLoginAgent = null;
 
+    // Send email if collectAll is true
+    if (collectAll) {
+      try {
+        const totalLines = collectResult.results.reduce((sum, r) => sum + r.lines.length, 0);
+        const linesByAccount = collectResult.results.map((r) => ({
+          accountName: r.accountName || r.accountId,
+          lineCount: r.lines.length,
+        }));
+        await sendStatementCollectionEmail(
+          collectResult.results.length,
+          totalLines,
+          linesByAccount,
+          collectResult.errors
+        );
+      } catch (emailError) {
+        logger.error('Failed to send statement collection email', { error: emailError });
+      }
+    }
+
+    // Send error email if there were errors and collectAll is true
+    if (collectAll && collectResult.errors && collectResult.errors.length > 0) {
+      try {
+        await sendErrorEmail('Agent 2', 'Bank statements collection completed with errors', {
+          accountsProcessed: collectResult.results.length,
+          totalLines: collectResult.results.reduce((sum, r) => sum + r.lines.length, 0),
+          errors: collectResult.errors,
+        });
+      } catch (emailError) {
+        logger.error('Failed to send error email', { error: emailError });
+      }
+    }
+
     res.json(collectResult);
   } catch (error) {
     logger.error('Collect-by-id error', { error });
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    const { collectAll = false } = req.body as { collectAll?: boolean };
+    if (collectAll) {
+      try {
+        await sendErrorEmail('Agent 2', errorMsg, { action: 'Bank statements collection', collectAll: true });
+      } catch (emailError) {
+        logger.error('Failed to send error email', { error: emailError });
+      }
+    }
     res.status(500).json({
       success: false,
       message: 'Collect-by-id error',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorMsg,
     });
   }
 });
