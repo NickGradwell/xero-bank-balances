@@ -1248,6 +1248,7 @@ export class XeroLoginAgent {
         // Poll for table every 5 seconds instead of waiting 60s
         // Try multiple selectors as the table structure may differ on BankTransactions.aspx
         const tableSelectors = [
+          'table#bankTransactions', // BankTransactions.aspx uses this ID
           'table#statementDetails.standard[data-automationid="statementGrid"]',
           'table#statementDetails[data-automationid="statementGrid"]',
           'table[data-automationid="statementGrid"]',
@@ -1264,13 +1265,24 @@ export class XeroLoginAgent {
             try {
               const table = await page.locator(selector).first();
               if (await table.count() > 0) {
-                // Verify it has rows
+                // Verify it has rows - wait a bit for rows to load
+                await page.waitForTimeout(1000);
                 const rows = await table.locator('tbody tr').all();
-                if (rows.length > 0) {
+                // Check if rows have content (not just header)
+                let rowCount = 0;
+                for (const row of rows) {
+                  const cells = await row.locator('td').all();
+                  if (cells.length > 0) {
+                    rowCount++;
+                  }
+                }
+                if (rowCount > 0) {
                   tableFound = true;
                   foundSelector = selector;
-                  this.addLog('COLLECT_ID', `Statement table found after ${attempt * 5} seconds using selector: ${selector}`);
+                  this.addLog('COLLECT_ID', `Statement table found after ${attempt * 5} seconds using selector: ${selector} with ${rowCount} data rows`);
                   break;
+                } else {
+                  this.addLog('COLLECT_ID', `Table found but no data rows yet (${rows.length} total rows)`);
                 }
               }
             } catch (e) {
@@ -1289,7 +1301,8 @@ export class XeroLoginAgent {
                 const id = await table.getAttribute('id');
                 const dataId = await table.getAttribute('data-automationid');
                 const classes = await table.getAttribute('class');
-                tableInfo.push(`id="${id || 'none'}" data-automationid="${dataId || 'none'}" class="${classes || 'none'}"`);
+                const rowCount = await table.locator('tbody tr').count();
+                tableInfo.push(`id="${id || 'none'}" data-automationid="${dataId || 'none'}" class="${classes || 'none'}" rows=${rowCount}`);
               }
               if (tableInfo.length > 0) {
                 this.addLog('COLLECT_ID', `Found ${allTables.length} table(s) on page. First few: ${tableInfo.join('; ')}`);
@@ -1310,16 +1323,25 @@ export class XeroLoginAgent {
         }
 
         const lines: BankStatementRow[] = [];
-        // Use the found selector or fall back to the first one
-        const rowSelector = foundSelector 
-          ? `${foundSelector} tbody tr[data-statementid]`
-          : 'table#statementDetails.standard[data-automationid="statementGrid"] tbody tr[data-statementid]';
+        // Use the found selector or fall back to bankTransactions
+        const tableSelector = foundSelector || 'table#bankTransactions';
         
-        // If data-statementid rows not found, try without that attribute
-        let rows = await page.locator(rowSelector).all();
+        // Try multiple row selectors
+        let rows = await page.locator(`${tableSelector} tbody tr[data-statementid]`).all();
         if (rows.length === 0) {
           this.addLog('COLLECT_ID', `No rows with data-statementid, trying all tbody rows...`);
-          rows = await page.locator(`${foundSelector || 'table#statementDetails'} tbody tr`).all();
+          rows = await page.locator(`${tableSelector} tbody tr`).all();
+          // Filter out header rows (rows with only th elements or very few cells)
+          const dataRows = [];
+          for (const row of rows) {
+            const thCount = await row.locator('th').count();
+            const tdCount = await row.locator('td').count();
+            if (thCount === 0 && tdCount >= 7) { // Data row should have at least 7 cells
+              dataRows.push(row);
+            }
+          }
+          rows = dataRows;
+          this.addLog('COLLECT_ID', `Filtered to ${rows.length} data rows (excluding headers)`);
         }
         this.addLog('COLLECT_ID', `Found ${rows.length} statement rows to process for ${nameLabel}`);
         
