@@ -1222,14 +1222,23 @@ app.post('/api/xero/accounts/collect', async (req, res): Promise<void> => {
     // Send email if collectAll is true
     if (collectAll) {
       try {
-        await sendAccountCollectionEmail(
+        logger.info('Sending account collection email', {
+          totalAccounts: collectResult.accounts.length,
+          newAccounts,
+          updatedAccounts,
+          hasErrors: !!collectResult.errors,
+        });
+        const emailSent = await sendAccountCollectionEmail(
           collectResult.accounts.length,
           newAccounts,
           updatedAccounts,
           collectResult.errors
         );
+        if (!emailSent) {
+          logger.error('Account collection email sending returned false - check email service logs');
+        }
       } catch (emailError) {
-        logger.error('Failed to send account collection email', { error: emailError });
+        logger.error('Exception while sending account collection email', { error: emailError });
       }
     }
 
@@ -1400,6 +1409,24 @@ app.post('/api/xero/bank-statements/collect-by-id', async (req, res): Promise<vo
       success: false,
       message: 'Collect-by-id error',
       error: errorMsg,
+    });
+  }
+});
+
+// Test email endpoint
+app.post('/api/test-email', async (req, res): Promise<void> => {
+  try {
+    const { sendErrorEmail } = await import('./services/email');
+    await sendErrorEmail('Test Agent', 'This is a test email from the Xero Bank Balances system', {
+      test: true,
+      timestamp: new Date().toISOString(),
+    });
+    res.json({ success: true, message: 'Test email sent. Check your inbox and Railway logs for details.' });
+  } catch (error) {
+    logger.error('Test email error', { error });
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 });
