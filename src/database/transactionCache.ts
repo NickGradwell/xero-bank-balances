@@ -224,11 +224,16 @@ export async function initTransactionCache(): Promise<void> {
       );
     `);
 
+    // Drop old partial index if it exists (migration)
+    await database.query(`
+      DROP INDEX IF EXISTS idx_bank_statement_unique;
+    `);
+
     // Add unique constraint to prevent duplicates based on transaction details
+    // Note: Using a regular unique index (not partial) so it can be used in ON CONFLICT
     await database.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_unique 
-      ON bank_statement_lines(account_id, statement_date, description, reference, spent, received, balance)
-      WHERE statement_date IS NOT NULL;
+      ON bank_statement_lines(account_id, statement_date, description, reference, spent, received, balance);
     `);
 
     await database.query(`CREATE INDEX IF NOT EXISTS idx_bank_statement_account ON bank_statement_lines(account_id, created_at DESC);`);
