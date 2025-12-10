@@ -763,7 +763,7 @@
             });
 
             // Create modal content
-            const modal = document.getElementById('accountTransactionsModal');
+            let modal = document.getElementById('accountTransactionsModal');
             if (!modal) {
                 // Create modal if it doesn't exist
                 const modalHtml = `
@@ -813,9 +813,9 @@
                     </div>
                 `;
                 document.body.insertAdjacentHTML('beforeend', modalHtml);
+                modal = document.getElementById('accountTransactionsModal');
             }
 
-            const modal = document.getElementById('accountTransactionsModal');
             document.getElementById('modalAccountName').textContent = account.accountName || account.accountId;
             document.getElementById('modalTransactionCount').textContent = `${sortedStatements.length} transactions`;
 
