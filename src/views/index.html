@@ -700,6 +700,31 @@
 
         let allAccountsData = [];
 
+        function calculateAccountBalance(statements) {
+            let totalReceived = 0;
+            let totalSpent = 0;
+            
+            statements.forEach(stmt => {
+                // Parse received value (remove currency symbols, commas, parentheses)
+                const receivedStr = (stmt.received || '').toString().replace(/[£$,\s()]/g, '');
+                const received = parseFloat(receivedStr) || 0;
+                totalReceived += received;
+                
+                // Parse spent value (remove currency symbols, commas, parentheses)
+                const spentStr = (stmt.spent || '').toString().replace(/[£$,\s()]/g, '');
+                const spent = parseFloat(spentStr) || 0;
+                totalSpent += spent;
+            });
+            
+            return totalReceived - totalSpent;
+        }
+
+        function formatBalance(balance) {
+            const isNegative = balance < 0;
+            const absBalance = Math.abs(balance);
+            return `${isNegative ? '-' : ''}£${absBalance.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
         function displayBankAccounts(accounts) {
             allAccountsData = accounts; // Store for download all
             const grid = document.getElementById('accountsGrid');
@@ -716,6 +741,9 @@
             grid.innerHTML = accounts.map((account, index) => {
                 const statements = account.statements || [];
                 const lastCollected = account.lastCollectedAt ? new Date(account.lastCollectedAt).toLocaleDateString() : 'Never';
+                const balance = calculateAccountBalance(statements);
+                const formattedBalance = formatBalance(balance);
+                const balanceColor = balance >= 0 ? 'text-green-600' : 'text-red-600';
                 
                 return `
                     <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow cursor-pointer" onclick="viewAccountTransactions('${escapeHtml(account.accountId)}', ${index})">
@@ -731,11 +759,15 @@
                             </div>
                         </div>
                         <div class="border-t border-gray-200 pt-4">
-                            <div class="flex items-center justify-between text-sm">
+                            <div class="flex items-center justify-between text-sm mb-2">
                                 <span class="text-gray-600">Last collected:</span>
                                 <span class="text-gray-800 font-medium">${lastCollected}</span>
                             </div>
-                            <div class="mt-3 flex gap-2">
+                            <div class="flex items-center justify-between text-sm mb-3">
+                                <span class="text-gray-600">Balance:</span>
+                                <span class="text-lg font-bold ${balanceColor}">${escapeHtml(formattedBalance)}</span>
+                            </div>
+                            <div class="flex gap-2">
                                 <button onclick="event.stopPropagation(); viewAccountTransactions('${escapeHtml(account.accountId)}', ${index})" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
                                     <i class="fas fa-eye mr-1"></i>View
                                 </button>
@@ -787,6 +819,7 @@
                                 <div>
                                     <h2 id="modalAccountName" class="text-2xl font-semibold text-gray-800"></h2>
                                     <p id="modalTransactionCount" class="text-sm text-gray-500 mt-1"></p>
+                                    <p id="modalAccountBalance" class="text-lg font-bold mt-2"></p>
                                 </div>
                                 <div class="flex gap-2">
                                     <button onclick="downloadCurrentAccountStatements()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
@@ -834,12 +867,20 @@
 
             const modalAccountNameEl = document.getElementById('modalAccountName');
             const modalTransactionCountEl = document.getElementById('modalTransactionCount');
+            const modalAccountBalanceEl = document.getElementById('modalAccountBalance');
             
             if (modalAccountNameEl) {
                 modalAccountNameEl.textContent = account.accountName || account.accountId;
             }
             if (modalTransactionCountEl) {
                 modalTransactionCountEl.textContent = `${sortedStatements.length} transactions`;
+            }
+            if (modalAccountBalanceEl) {
+                const balance = calculateAccountBalance(sortedStatements);
+                const formattedBalance = formatBalance(balance);
+                const balanceColor = balance >= 0 ? 'text-green-600' : 'text-red-600';
+                modalAccountBalanceEl.textContent = `Balance: ${formattedBalance}`;
+                modalAccountBalanceEl.className = `text-lg font-bold mt-2 ${balanceColor}`;
             }
 
             // Store current account data for download
