@@ -817,9 +817,9 @@
                         <div class="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
                             <div class="flex items-center justify-between p-6 border-b border-gray-200">
                                 <div>
-                                    <h2 id="modalAccountName" class="text-3xl font-bold text-gray-800 mb-2"></h2>
-                                    <p id="modalTransactionCount" class="text-sm text-gray-500 mt-1"></p>
-                                    <p id="modalAccountBalance" class="text-lg font-bold mt-2"></p>
+                                    <h2 id="accountModalAccountName" class="text-3xl font-bold text-gray-800 mb-2"></h2>
+                                    <p id="accountModalTransactionCount" class="text-sm text-gray-500 mt-1"></p>
+                                    <p id="accountModalAccountBalance" class="text-lg font-bold mt-2"></p>
                                 </div>
                                 <div class="flex gap-2">
                                     <button onclick="downloadCurrentAccountStatements()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors">
@@ -865,12 +865,15 @@
                 await new Promise(resolve => setTimeout(resolve, 10));
             }
 
-            const modalAccountNameEl = document.getElementById('modalAccountName');
-            const modalTransactionCountEl = document.getElementById('modalTransactionCount');
-            const modalAccountBalanceEl = document.getElementById('modalAccountBalance');
+            const modalAccountNameEl = document.getElementById('accountModalAccountName');
+            const modalTransactionCountEl = document.getElementById('accountModalTransactionCount');
+            const modalAccountBalanceEl = document.getElementById('accountModalAccountBalance');
             
             if (modalAccountNameEl) {
                 modalAccountNameEl.textContent = account.accountName || account.accountId;
+                console.log('Set account name to:', account.accountName || account.accountId);
+            } else {
+                console.error('accountModalAccountName element not found!');
             }
             if (modalTransactionCountEl) {
                 modalTransactionCountEl.textContent = `${sortedStatements.length} transactions`;
