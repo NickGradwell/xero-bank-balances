@@ -455,7 +455,8 @@ app.get('/api/xero/accounts', async (req, res): Promise<void> => {
 // API endpoint to get bank statement lines grouped by account (for main page)
 app.get('/api/xero/statements/by-account', async (_req, res): Promise<void> => {
   try {
-    const statementsByAccount = await getStatementLinesByAccount(100);
+    // Get all statements (no limit) - limitPerAccount set to very high number
+    const statementsByAccount = await getStatementLinesByAccount(100000);
     const accounts = await listBankAccounts(200);
     
     // Combine account info with statement lines
